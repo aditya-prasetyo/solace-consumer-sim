@@ -1,0 +1,163 @@
+version: '3.8'
+
+# =============================================================================
+# CDC Architecture POC - Architecture A (PySpark → PostgreSQL)
+# =============================================================================
+# Usage:
+#   Development (Hybrid Mode):
+#     docker compose -f docker-compose.spark.yml up -d
+#
+#   Full Container Mode:
+#     docker compose -f docker-compose.spark.yml --profile full up -d
+# =============================================================================
+
+services:
+  # ============================================
+  # INFRASTRUCTURE (Always running)
+  # ============================================
+  solace:
+    image: solace/solace-pubsub-standard:latest
+    container_name: solace
+    hostname: solace
+    ports:
+      - "55555:55555"    # SMF - Solace Message Format
+      - "8080:8080"      # SEMP Management UI
+      - "8008:8008"      # Web Transport
+      - "9000:9000"      # REST Messaging
+      - "5672:5672"      # AMQP
+    environment:
+      - username_admin_globalaccesslevel=admin
+      - username_admin_password=admin
+      - system_scaling_maxconnectioncount=100
+    shm_size: 1g
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          memory: 1G
+    networks:
+      - cdc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health-check/guaranteed-active"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    volumes:
+      - solace-data:/var/lib/solace
+
+  postgres:
+    image: postgres:15
+    container_name: postgres-ods
+    hostname: postgres-ods
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=cdc_user
+      - POSTGRES_PASSWORD=cdc_pass
+      - POSTGRES_DB=ods
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+    volumes:
+      - ../sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - cdc-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cdc_user -d ods"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # GENERATOR (Optional - use profiles)
+  # For local development: don't include --profile
+  # ============================================
+  generator:
+    profiles: ["full", "with-generator"]
+    build:
+      context: ..
+      dockerfile: docker/dockerfiles/Dockerfile.generator
+    container_name: cdc-generator
+    hostname: cdc-generator
+    depends_on:
+      solace:
+        condition: service_healthy
+    environment:
+      - SOLACE_HOST=solace
+      - SOLACE_PORT=55555
+      - SOLACE_VPN=default
+      - SOLACE_USERNAME=admin
+      - SOLACE_PASSWORD=admin
+      - EVENTS_PER_MINUTE=5000
+      - LOG_LEVEL=INFO
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    networks:
+      - cdc-network
+    restart: unless-stopped
+
+  # ============================================
+  # CONSUMER (Architecture A - PySpark)
+  # ============================================
+  spark-consumer:
+    profiles: ["full", "with-consumer"]
+    build:
+      context: ..
+      dockerfile: docker/dockerfiles/Dockerfile.spark
+    container_name: spark-consumer
+    hostname: spark-consumer
+    ports:
+      - "4040:4040"      # Spark UI
+      - "4041:4041"      # Spark UI (additional)
+    depends_on:
+      solace:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      - SOLACE_HOST=solace
+      - SOLACE_PORT=55555
+      - SOLACE_VPN=default
+      - SOLACE_USERNAME=admin
+      - SOLACE_PASSWORD=admin
+      - POSTGRES_HOST=postgres-ods
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=cdc_user
+      - POSTGRES_PASSWORD=cdc_pass
+      - POSTGRES_DB=ods
+      - SPARK_DRIVER_MEMORY=2g
+      - SPARK_EXECUTOR_MEMORY=1g
+      - CHECKPOINT_LOCATION=/checkpoints
+      - LOG_LEVEL=INFO
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+    volumes:
+      - spark-checkpoints:/checkpoints
+    networks:
+      - cdc-network
+    restart: unless-stopped
+
+networks:
+  cdc-network:
+    driver: bridge
+    name: cdc-network
+
+volumes:
+  solace-data:
+    name: solace-data
+  postgres-data:
+    name: postgres-data
+  spark-checkpoints:
+    name: spark-checkpoints

@@ -1,0 +1,155 @@
+version: '3.8'
+
+# =============================================================================
+# CDC Architecture POC - Architecture B (PyFlink → REST API)
+# =============================================================================
+# Usage:
+#   Development (Hybrid Mode):
+#     docker compose -f docker-compose.flink.yml up -d
+#
+#   Full Container Mode:
+#     docker compose -f docker-compose.flink.yml --profile full up -d
+# =============================================================================
+
+services:
+  # ============================================
+  # INFRASTRUCTURE (Always running)
+  # ============================================
+  solace:
+    image: solace/solace-pubsub-standard:latest
+    container_name: solace
+    hostname: solace
+    ports:
+      - "55555:55555"    # SMF - Solace Message Format
+      - "8080:8080"      # SEMP Management UI
+      - "8008:8008"      # Web Transport
+      - "9000:9000"      # REST Messaging
+      - "5672:5672"      # AMQP
+    environment:
+      - username_admin_globalaccesslevel=admin
+      - username_admin_password=admin
+      - system_scaling_maxconnectioncount=100
+    shm_size: 1g
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          memory: 1G
+    networks:
+      - cdc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health-check/guaranteed-active"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    volumes:
+      - solace-data:/var/lib/solace
+
+  rest-api:
+    build:
+      context: ..
+      dockerfile: docker/dockerfiles/Dockerfile.api
+    container_name: rest-api
+    hostname: rest-api
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - LOG_LEVEL=INFO
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    networks:
+      - cdc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ============================================
+  # GENERATOR (Optional - use profiles)
+  # For local development: don't include --profile
+  # ============================================
+  generator:
+    profiles: ["full", "with-generator"]
+    build:
+      context: ..
+      dockerfile: docker/dockerfiles/Dockerfile.generator
+    container_name: cdc-generator
+    hostname: cdc-generator
+    depends_on:
+      solace:
+        condition: service_healthy
+    environment:
+      - SOLACE_HOST=solace
+      - SOLACE_PORT=55555
+      - SOLACE_VPN=default
+      - SOLACE_USERNAME=admin
+      - SOLACE_PASSWORD=admin
+      - EVENTS_PER_MINUTE=5000
+      - LOG_LEVEL=INFO
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    networks:
+      - cdc-network
+    restart: unless-stopped
+
+  # ============================================
+  # CONSUMER (Architecture B - PyFlink)
+  # ============================================
+  flink-consumer:
+    profiles: ["full", "with-consumer"]
+    build:
+      context: ..
+      dockerfile: docker/dockerfiles/Dockerfile.flink
+    container_name: flink-consumer
+    hostname: flink-consumer
+    ports:
+      - "8081:8081"      # Flink Web UI
+    depends_on:
+      solace:
+        condition: service_healthy
+      rest-api:
+        condition: service_healthy
+    environment:
+      - SOLACE_HOST=solace
+      - SOLACE_PORT=55555
+      - SOLACE_VPN=default
+      - SOLACE_USERNAME=admin
+      - SOLACE_PASSWORD=admin
+      - REST_API_URL=http://rest-api:8000
+      - FLINK_TASKMANAGER_MEMORY=1600m
+      - CHECKPOINT_LOCATION=/checkpoints
+      - LOG_LEVEL=INFO
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+    volumes:
+      - flink-checkpoints:/checkpoints
+    networks:
+      - cdc-network
+    restart: unless-stopped
+
+networks:
+  cdc-network:
+    driver: bridge
+    name: cdc-network
+
+volumes:
+  solace-data:
+    name: solace-data
+  flink-checkpoints:
+    name: flink-checkpoints
