@@ -1,44 +1,35 @@
-# CDC Architecture POC - Executive Summary
+# CDC Architecture POC
 
-> **Versi ringkas dari [BLUEPRINT_CDC_ARCHITECTURE.md](./BLUEPRINT_CDC_ARCHITECTURE.md)**
-> Untuk detail teknis lengkap, lihat dokumen utama.
+> Proof of Concept untuk arsitektur Change Data Capture (CDC) dengan Solace PubSub+
 
----
+## Overview
 
-## 1. Tujuan POC
-
-Memvalidasi arsitektur CDC yang dapat:
+POC ini memvalidasi arsitektur CDC yang dapat:
 - Memproses **5,000 events/menit** dari Oracle (simulasi Debezium)
 - Melakukan **3-way join** antar topic
 - Handle **dynamic schema changes**
 - Extract **XML columns** menjadi table baru
 - Resilient terhadap **common failures**
 
----
-
-## 2. Architecture Overview
-
-### 2.1 High-Level Flow
+## Architecture
 
 ```
-                                    ┌─────────────────────────────────────┐
-                                    │         DOCKER ENVIRONMENT          │
-                                    │                                     │
-┌──────────────┐                    │  ┌─────────┐      ┌─────────────┐  │
-│    Oracle    │  (simulated by)    │  │         │      │  PySpark    │──┼──▶ PostgreSQL (ODS)
-│   Database   │ ─────────────────▶ │  │ Solace  │ ───▶ │    OR       │  │
-│  (20 tables) │                    │  │ PubSub+ │      │  PyFlink    │──┼──▶ REST API
-└──────────────┘                    │  │         │      │             │  │
-        │                           │  └─────────┘      └─────────────┘  │
-        │                           │                                     │
-        ▼                           └─────────────────────────────────────┘
-┌──────────────┐
-│   Debezium   │
-│  Simulator   │ ◀── Python script yang generate CDC events
-└──────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           DOCKER ENVIRONMENT                                 │
+│                                                                             │
+│  ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐       │
+│  │  Data Generator │────▶│     Solace      │────▶│  PySpark/Flink  │       │
+│  │  (Debezium Sim) │     │    PubSub+      │     │    Consumer     │       │
+│  └─────────────────┘     └─────────────────┘     └────────┬────────┘       │
+│                                                           │                 │
+│                                                           ▼                 │
+│                                    ┌──────────────────────────────────┐    │
+│                                    │  PostgreSQL (ODS) / REST API     │    │
+│                                    └──────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 Dua Arsitektur Terpisah
+### Two Independent Architectures
 
 | | Architecture A | Architecture B |
 |:--|:---------------|:---------------|
@@ -47,244 +38,154 @@ Memvalidasi arsitektur CDC yang dapat:
 | **Use Case** | Batch aggregation, complex joins | Real-time alerting |
 | **Latency** | Seconds to minutes | < 5 seconds |
 
----
+## Quick Start
 
-## 3. Key Requirements
+### Prerequisites
 
-### 3.1 Performance
+- Docker & Docker Compose v2+
+- Python 3.11+ (for local development)
+- 16GB RAM (minimum)
+- 100GB Storage
 
-| Metric | Target |
-|:-------|:-------|
-| Throughput | 5,000 events/min (~83/sec) |
-| Peak Load | 10,000 events/min |
-| Latency (p99) | < 10 seconds |
-| Error Rate | < 0.1% |
+### Option 1: Hybrid Mode (Development) - Recommended
 
-### 3.2 Data Simulation
+```bash
+# Start infrastructure only
+./scripts/start-infra-only.sh spark
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  5 Tables (simulasi 20 tables)                          │
-├─────────────────────────────────────────────────────────┤
-│  ORDERS        │ 2,000/min │ 40% │ High volume         │
-│  ORDER_ITEMS   │ 2,000/min │ 40% │ High volume         │
-│  CUSTOMERS     │   500/min │ 10% │ Dimension (join)    │
-│  PRODUCTS      │   400/min │  8% │ Dimension (join)    │
-│  AUDIT_LOG     │   100/min │  2% │ Reference           │
-├─────────────────────────────────────────────────────────┤
-│  TOTAL         │ 5,000/min │100% │                     │
-└─────────────────────────────────────────────────────────┘
+# Run generator locally (in another terminal)
+./scripts/start-generator-local.sh
 ```
 
-### 3.3 Transformation: 3-Way Join
+### Option 2: Full Container Mode (Integration/Demo)
 
-```
-ORDERS ──┐
-         ├──▶ JOIN ──▶ Enriched Data ──▶ ODS / API
-CUSTOMERS┤
-         │
-PRODUCTS─┘
-```
+```bash
+# Architecture A (PySpark → PostgreSQL)
+./scripts/start-spark-arch.sh
 
----
-
-## 4. Special Features (WAJIB)
-
-### 4.1 Dynamic Schema Evolution
-
-| Event | Behavior |
-|:------|:---------|
-| New column added | Auto-detect, include in processing |
-| Column removed | Treat as NULL, no error |
-| Type changed | Safe coercion |
-
-**Storage:** PostgreSQL dengan JSONB untuk flexibility
-
-### 4.2 XML Column Extraction
-
-```
-1 ORDER with XML ──▶ XML Extractor ──▶ N ORDER_ITEMS rows
-                                   ──▶ 1 ORDER row (cleaned)
+# OR Architecture B (PyFlink → REST API)
+./scripts/start-flink-arch.sh
 ```
 
-| Scenario | Handling |
-|:---------|:---------|
-| Valid XML | Extract to new table |
-| Malformed XML | Send to DLQ |
-| Empty/NULL XML | Skip, no error |
+### Stop Services
 
-### 4.3 Failure Handling
+```bash
+./scripts/stop-all.sh
 
-| Category | Scenario | Expected |
-|:---------|:---------|:---------|
-| Consumer | Crash/restart | Resume from checkpoint |
-| Broker | Solace restart | Auto-reconnect |
-| Target | DB/API down | Circuit breaker + retry |
-| Data | Invalid message | DLQ + continue |
+# With volume cleanup
+./scripts/stop-all.sh --clean
+```
 
----
+## Monitoring URLs
 
-## 5. Test Scenarios Summary
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| Solace Manager | http://localhost:8080 | admin / admin |
+| Spark UI | http://localhost:4040 | - |
+| Flink UI | http://localhost:8081 | - |
+| REST API Docs | http://localhost:8000/docs | - |
+| PostgreSQL | localhost:5432 | cdc_user / cdc_pass |
 
-### 5.1 Mandatory Tests
-
-| Category | Count | IDs |
-|:---------|:------|:----|
-| Failure Scenarios | 10 | F1-F10 |
-| Schema Evolution | 6 | S1-S6 |
-| XML Extraction | 8 | X1-X8 |
-| **Total** | **24** | |
-
-### 5.2 Benchmark Scenarios
-
-| Scenario | Load | Duration |
-|:---------|:-----|:---------|
-| Baseline | 1K/min | 10 min |
-| Target | 5K/min | 30 min |
-| Peak | 10K/min | 15 min |
-| Sustained | 5K/min | 60 min |
-
----
-
-## 6. Technology Stack
-
-| Layer | Technology |
-|:------|:-----------|
-| Message Broker | Solace PubSub+ (Docker) |
-| Stream Processing | PySpark 3.5 / PyFlink 1.18 |
-| Database | PostgreSQL 15 |
-| API Mock | FastAPI |
-| Container | Docker Compose |
-
----
-
-## 7. Project Structure (Simplified)
+## Project Structure
 
 ```
 solace_consumer_service/
 ├── docker/
 │   ├── docker-compose.spark.yml    # Architecture A
-│   └── docker-compose.flink.yml    # Architecture B
+│   ├── docker-compose.flink.yml    # Architecture B
+│   └── dockerfiles/
+│       ├── Dockerfile.generator
+│       ├── Dockerfile.spark
+│       ├── Dockerfile.flink
+│       └── Dockerfile.api
 ├── src/
 │   ├── generator/                  # Debezium simulator
-│   ├── spark_consumer/             # Architecture A
-│   ├── flink_consumer/             # Architecture B
-│   └── rest_api/                   # Mock API target
-├── configs/
+│   ├── spark_consumer/             # Architecture A consumer
+│   ├── flink_consumer/             # Architecture B consumer
+│   ├── rest_api/                   # Mock API target
+│   └── common/                     # Shared utilities
+├── configs/                        # YAML configurations
+├── scripts/                        # Helper scripts
+├── sql/                           # PostgreSQL init scripts
+├── tests/                         # Test files
+├── requirements/                  # Python dependencies
 └── docs/
-    ├── BLUEPRINT_SUMMARY.md        # This file
-    └── BLUEPRINT_CDC_ARCHITECTURE.md  # Full details
+    ├── BLUEPRINT_CDC_ARCHITECTURE.md  # Full technical spec
+    └── BLUEPRINT_SUMMARY.md           # Executive summary
 ```
 
----
+## Configuration
 
-## 8. Implementation Phases
-
-```
-Phase 1: Infrastructure     ──▶ Docker, Solace, PostgreSQL, API
-          │
-Phase 2: Data Generator     ──▶ Debezium simulator, 5 tables
-          │
-Phase 3: PySpark Consumer   ──▶ 3-way join, PostgreSQL sink
-          │
-Phase 4: PyFlink Consumer   ──▶ Real-time processing, REST sink
-          │
-Phase 5: Testing            ──▶ 24 mandatory test scenarios
-```
-
----
-
-## 9. Quick Commands
+Copy `.env.example` to `.env` and modify as needed:
 
 ```bash
-# Start Architecture A (PySpark → PostgreSQL)
-docker compose -f docker/docker-compose.spark.yml up -d
-
-# Start Architecture B (PyFlink → REST API)
-docker compose -f docker/docker-compose.flink.yml up -d
-
-# View logs
-docker compose logs -f spark-consumer
-docker compose logs -f flink-consumer
+cp .env.example .env
 ```
 
-**Monitoring URLs:**
-- Solace Manager: http://localhost:8080
-- Spark UI: http://localhost:4040
-- Flink UI: http://localhost:8081
-- REST API Docs: http://localhost:8000/docs
+Key configurations:
+- `EVENTS_PER_MINUTE`: Event generation rate (default: 5000)
+- `SOLACE_HOST`: Solace broker host
+- `POSTGRES_*`: PostgreSQL connection settings
 
----
+## Test Scenarios
 
-## 10. Checklist Summary
+| Category | Count | IDs |
+|----------|-------|-----|
+| Failure Scenarios | 10 | F1-F10 |
+| Schema Evolution | 6 | S1-S6 |
+| XML Extraction | 8 | X1-X8 |
+| **Total** | **24** | |
 
-### WAJIB
-- [ ] CDC event generation (5 tables, 5K/min)
-- [ ] Solace pub/sub with dynamic topics
-- [ ] PySpark 3-way join → PostgreSQL
-- [ ] PyFlink processing → REST API
-- [ ] Checkpoint/recovery
-- [ ] DLQ implementation
-- [ ] Dynamic schema handling
-- [ ] XML extraction
-- [ ] 24 test scenarios (F1-F10, S1-S6, X1-X8)
-
-### OPSIONAL
-- [ ] Distributed Spark/Flink cluster
-- [ ] 20K+ events/min stress test
-- [ ] Prometheus/Grafana monitoring
-
----
-
-## 11. Configuration Defaults
-
-| Setting | Value |
-|:--------|:------|
-| Target latency | < 5s |
-| Solace mode | Persistent Queue |
-| State backend | In-memory |
-| DLQ retention | 7 days |
-| Checkpoint interval | 10 seconds |
-
----
-
-## 12. Resource Requirements
+## Resource Requirements
 
 ### POC Environment (16GB RAM)
 
-| Component | CPU | RAM | Storage |
-|:----------|:----|:----|:--------|
-| Solace PubSub+ | 1 core | 2GB | 5GB |
-| PostgreSQL | 0.5 core | 1GB | 10GB |
-| Spark Consumer | 2 cores | 4GB | - |
-| Flink Consumer | 1 core | 2GB | - |
-| Generator | 0.5 core | 512MB | - |
-| REST API | 0.5 core | 512MB | - |
+| Component | RAM |
+|-----------|-----|
+| Solace PubSub+ | 2GB |
+| PostgreSQL | 1GB |
+| Spark Consumer | 4GB |
+| Flink Consumer | 2GB |
+| Generator | 512MB |
 
-**Total per Architecture:**
-- Architecture A (Spark): ~10GB RAM
-- Architecture B (Flink): ~8GB RAM
+**Note:** Run Architecture A and B separately, not simultaneously.
 
-> ⚠️ **Recommendation:** Jalankan Architecture A dan B secara terpisah, tidak bersamaan.
+## Documentation
 
-### Production Environment
+- [Blueprint CDC Architecture](docs/BLUEPRINT_CDC_ARCHITECTURE.md) - Full technical specification
+- [Blueprint Summary](docs/BLUEPRINT_SUMMARY.md) - Executive summary
 
-| Component | CPU | RAM | Instances |
-|:----------|:----|:----|:----------|
-| Solace (HA) | 4 cores | 8GB | 3 nodes |
-| PostgreSQL (HA) | 4 cores | 16GB | 2 nodes |
-| Spark Cluster | 8 cores | 16GB | 3 workers |
-| Flink Cluster | 4 cores | 8GB | 3 TMs |
+## Implementation Status
+
+### Phase 1: Infrastructure ✅
+- [x] Docker Compose configurations
+- [x] PostgreSQL schema
+- [x] Dockerfiles
+- [x] Configuration files
+- [x] Helper scripts
+
+### Phase 2: Data Generator 🔄
+- [ ] Debezium format models
+- [ ] Solace publisher
+- [ ] 5 table generators
+- [ ] XML generation
+
+### Phase 3: PySpark Consumer ⏳
+- [ ] Solace source
+- [ ] 3-way join
+- [ ] PostgreSQL sink
+- [ ] XML extraction
+
+### Phase 4: PyFlink Consumer ⏳
+- [ ] Solace source
+- [ ] Stream processing
+- [ ] REST API sink
+
+### Phase 5: Testing ⏳
+- [ ] Failure scenarios (F1-F10)
+- [ ] Schema evolution (S1-S6)
+- [ ] XML extraction (X1-X8)
 
 ---
 
-## 13. Document References
-
-| Document | Description |
-|:---------|:------------|
-| [BLUEPRINT_CDC_ARCHITECTURE.md](./BLUEPRINT_CDC_ARCHITECTURE.md) | Full technical specification |
-| [BLUEPRINT_SUMMARY.md](./BLUEPRINT_SUMMARY.md) | This executive summary |
-
----
-
-*Version: 1.7 | Last Updated: 2025-02-04 | Status: DRAFT*
+*Version: 1.7 | Last Updated: 2025-02-04*

@@ -1,0 +1,53 @@
+# =============================================================================
+# PyFlink Consumer - Architecture B
+# =============================================================================
+FROM python:3.11-slim
+
+LABEL maintainer="CDC POC Team"
+LABEL description="PyFlink DataStream Consumer"
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies including Java 11 (required for Flink)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    wget \
+    openjdk-11-jdk-headless \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first (for better caching)
+COPY requirements/base.txt requirements/base.txt
+COPY requirements/flink.txt requirements/flink.txt
+
+# Install Python dependencies (including PyFlink)
+RUN pip install --no-cache-dir -r requirements/flink.txt
+
+# Copy application code
+COPY src/flink_consumer ./src/flink_consumer
+COPY src/common ./src/common
+COPY configs ./configs
+
+# Set Python path
+ENV PYTHONPATH=/app/src:/app
+
+# Create checkpoint directory
+RUN mkdir -p /checkpoints && chmod 777 /checkpoints
+
+# Expose Flink Web UI port
+EXPOSE 8081
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8081 || exit 1
+
+# Run the Flink consumer
+CMD ["python", "-m", "src.flink_consumer.main"]
