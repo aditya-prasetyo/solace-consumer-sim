@@ -1,0 +1,20 @@
+# =============================================================================
+# Generator Requirements - Debezium Simulator
+# =============================================================================
+
+-r base.txt
+
+# Solace client
+solace-pubsubplus>=1.8.0
+
+# Data generation
+faker>=22.0.0
+
+# Async support
+asyncio-throttle>=1.0.2
+
+# Scheduling
+schedule>=1.2.1
+
+# XML generation
+lxml>=5.1.0

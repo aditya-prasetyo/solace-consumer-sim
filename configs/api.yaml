@@ -1,0 +1,80 @@
+# =============================================================================
+# REST API Mock Server Configuration - Architecture B Target
+# =============================================================================
+
+api:
+  # Server settings
+  server:
+    host: ${HOST:0.0.0.0}
+    port: ${PORT:8000}
+    workers: 1
+    reload: false
+
+  # Application info
+  app:
+    title: "CDC Events API"
+    description: "Mock REST API for CDC Event Processing"
+    version: "1.0.0"
+
+  # CORS settings
+  cors:
+    enabled: true
+    allow_origins: ["*"]
+    allow_methods: ["*"]
+    allow_headers: ["*"]
+
+# Endpoints configuration
+endpoints:
+  # Events endpoint
+  events:
+    path: "/api/v1/events"
+    methods: [POST, GET]
+    rate_limit: 1000  # per minute
+
+  # Notifications endpoint
+  notifications:
+    path: "/api/v1/notifications"
+    methods: [POST, GET]
+    rate_limit: 500
+
+  # Health check
+  health:
+    path: "/health"
+    methods: [GET]
+
+  # Metrics
+  metrics:
+    path: "/metrics"
+    methods: [GET]
+
+# Storage (in-memory for mock)
+storage:
+  # Event storage
+  events:
+    max_size: 10000
+    ttl_seconds: 3600  # 1 hour
+
+  # Notification storage
+  notifications:
+    max_size: 1000
+    ttl_seconds: 3600
+
+# Simulation settings (for testing)
+simulation:
+  # Simulate failures
+  failure:
+    enabled: false
+    rate: 0.01  # 1% failure rate
+    error_codes: [500, 502, 503]
+
+  # Simulate latency
+  latency:
+    enabled: false
+    min_ms: 10
+    max_ms: 100
+
+# Logging
+logging:
+  level: ${LOG_LEVEL:INFO}
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  access_log: true

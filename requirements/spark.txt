@@ -1,0 +1,24 @@
+# =============================================================================
+# Spark Consumer Requirements - Architecture A
+# =============================================================================
+
+-r base.txt
+
+# PySpark
+pyspark>=3.5.0
+
+# Database
+psycopg2-binary>=2.9.9
+sqlalchemy>=2.0.25
+
+# Solace connector (custom implementation)
+solace-pubsubplus>=1.8.0
+
+# XML parsing
+lxml>=5.1.0
+
+# Circuit breaker
+circuitbreaker>=2.0.0
+
+# Retry logic
+tenacity>=8.2.3

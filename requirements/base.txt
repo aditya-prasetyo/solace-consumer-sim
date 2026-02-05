@@ -1,0 +1,17 @@
+# =============================================================================
+# Base Requirements - Common dependencies for all components
+# =============================================================================
+
+# Configuration
+pyyaml>=6.0.1
+python-dotenv>=1.0.0
+
+# Logging
+structlog>=24.1.0
+
+# Utilities
+python-dateutil>=2.8.2
+uuid>=1.30
+
+# Type hints
+typing-extensions>=4.9.0

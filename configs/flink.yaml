@@ -1,0 +1,130 @@
+# =============================================================================
+# PyFlink Consumer Configuration - Architecture B
+# =============================================================================
+
+flink:
+  # Application settings
+  app_name: "CDC-Flink-Consumer"
+
+  # Parallelism
+  parallelism: 2
+
+  # Memory settings
+  taskmanager:
+    memory: ${FLINK_TASKMANAGER_MEMORY:1600m}
+    slots: 2
+
+  # Checkpoint settings
+  checkpoint:
+    enabled: true
+    interval_ms: 10000  # 10 seconds
+    mode: EXACTLY_ONCE  # EXACTLY_ONCE | AT_LEAST_ONCE
+    storage: ${CHECKPOINT_LOCATION:/checkpoints}
+    min_pause_ms: 5000
+    timeout_ms: 60000
+
+  # State backend
+  state:
+    backend: hashmap  # hashmap | rocksdb
+    ttl_ms: 3600000  # 1 hour
+
+  # Watermark
+  watermark:
+    strategy: bounded_out_of_orderness
+    max_out_of_orderness_ms: 10000
+
+  # Restart strategy
+  restart:
+    strategy: fixed_delay
+    attempts: 3
+    delay_ms: 10000
+
+  # Web UI
+  web:
+    enabled: true
+    port: 8081
+
+# Solace source configuration
+solace:
+  host: ${SOLACE_HOST:localhost}
+  port: ${SOLACE_PORT:55555}
+  vpn: ${SOLACE_VPN:default}
+  username: ${SOLACE_USERNAME:admin}
+  password: ${SOLACE_PASSWORD:admin}
+
+  # Topics to subscribe
+  topics:
+    - "cdc/oracle/SALES/ORDERS/*"
+    - "cdc/oracle/SALES/ORDER_ITEMS/*"
+    - "cdc/oracle/SALES/CUSTOMERS/*"
+    - "cdc/oracle/SALES/PRODUCTS/*"
+
+  # Queue for guaranteed delivery
+  queue: "cdc-flink-consumer"
+
+# REST API sink configuration
+rest_api:
+  url: ${REST_API_URL:http://localhost:8000}
+
+  # Endpoints
+  endpoints:
+    events: "/api/v1/events"
+    notifications: "/api/v1/notifications"
+
+  # HTTP client settings
+  client:
+    timeout_seconds: 30
+    max_connections: 10
+    retry_attempts: 3
+
+  # Batch settings
+  batch:
+    enabled: true
+    size: 100
+    interval_ms: 1000
+
+# Transformation settings
+transformation:
+  # Stream join configuration
+  join:
+    # Window for stream-stream join
+    window_duration_ms: 300000  # 5 minutes
+
+  # XML extraction
+  xml:
+    enabled: true
+    column: "shipping_info"
+
+  # Alert rules
+  alerts:
+    high_value_order:
+      enabled: true
+      threshold: 10000
+      priority: HIGH
+
+    new_customer:
+      enabled: true
+      tier: GOLD
+      priority: MEDIUM
+
+# Error handling
+error_handling:
+  # Retry configuration
+  retry:
+    max_attempts: 3
+    initial_delay_ms: 1000
+    max_delay_ms: 30000
+    backoff_multiplier: 2.0
+
+  # Dead Letter Queue
+  dlq:
+    enabled: true
+    topic_prefix: "cdc/dlq"
+
+  # Circuit breaker
+  circuit_breaker:
+    failure_threshold: 5
+    recovery_timeout_seconds: 30
+
+logging:
+  level: ${LOG_LEVEL:INFO}

@@ -1,0 +1,119 @@
+# =============================================================================
+# PySpark Consumer Configuration - Architecture A
+# =============================================================================
+
+spark:
+  # Application settings
+  app_name: "CDC-Spark-Consumer"
+  master: "local[*]"  # Use all available cores
+
+  # Memory settings
+  driver:
+    memory: ${SPARK_DRIVER_MEMORY:2g}
+    max_result_size: 1g
+  executor:
+    memory: ${SPARK_EXECUTOR_MEMORY:1g}
+    cores: 2
+
+  # Streaming settings
+  streaming:
+    # Micro-batch interval
+    trigger_interval: "10 seconds"
+
+    # Checkpoint location
+    checkpoint_location: ${CHECKPOINT_LOCATION:/checkpoints}
+
+    # Watermark for late data
+    watermark_delay: "10 seconds"
+
+    # Output mode
+    output_mode: append  # append | complete | update
+
+  # Shuffle settings
+  shuffle:
+    partitions: 4
+
+  # UI
+  ui:
+    enabled: true
+    port: 4040
+
+# Solace source configuration
+solace:
+  host: ${SOLACE_HOST:localhost}
+  port: ${SOLACE_PORT:55555}
+  vpn: ${SOLACE_VPN:default}
+  username: ${SOLACE_USERNAME:admin}
+  password: ${SOLACE_PASSWORD:admin}
+
+  # Topics to subscribe
+  topics:
+    - "cdc/oracle/SALES/ORDERS/*"
+    - "cdc/oracle/SALES/ORDER_ITEMS/*"
+    - "cdc/oracle/SALES/CUSTOMERS/*"
+    - "cdc/oracle/SALES/PRODUCTS/*"
+    - "cdc/oracle/SALES/AUDIT_LOG/*"
+
+  # Queue for guaranteed delivery
+  queue: "cdc-spark-consumer"
+
+# PostgreSQL sink configuration
+postgres:
+  host: ${POSTGRES_HOST:localhost}
+  port: ${POSTGRES_PORT:5432}
+  database: ${POSTGRES_DB:ods}
+  username: ${POSTGRES_USER:cdc_user}
+  password: ${POSTGRES_PASSWORD:cdc_pass}
+
+  # Connection pool
+  pool:
+    min_size: 2
+    max_size: 10
+
+  # Batch settings
+  batch:
+    size: 1000
+    interval_seconds: 5
+
+# Transformation settings
+transformation:
+  # 3-way join configuration
+  join:
+    # Window for stream-stream join
+    window_duration: "5 minutes"
+
+    # State TTL
+    state_ttl: "1 hour"
+
+  # XML extraction
+  xml:
+    enabled: true
+    column: "shipping_info"
+    target_table: "cdc_order_items_extracted"
+
+  # Dynamic schema
+  schema:
+    mode: flexible  # flexible | strict
+    jsonb_fallback: true
+
+# Error handling
+error_handling:
+  # Retry configuration
+  retry:
+    max_attempts: 3
+    initial_delay_ms: 1000
+    max_delay_ms: 30000
+    multiplier: 2.0
+
+  # Dead Letter Queue
+  dlq:
+    enabled: true
+    topic_prefix: "cdc/dlq"
+
+  # Circuit breaker
+  circuit_breaker:
+    failure_threshold: 5
+    recovery_timeout_seconds: 30
+
+logging:
+  level: ${LOG_LEVEL:INFO}

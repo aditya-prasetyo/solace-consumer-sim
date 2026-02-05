@@ -1,0 +1,86 @@
+# =============================================================================
+# Solace PubSub+ Configuration
+# =============================================================================
+
+solace:
+  # Connection settings
+  connection:
+    host: ${SOLACE_HOST:localhost}
+    port: ${SOLACE_PORT:55555}
+    vpn: ${SOLACE_VPN:default}
+    username: ${SOLACE_USERNAME:admin}
+    password: ${SOLACE_PASSWORD:admin}
+
+  # Timeouts
+  timeouts:
+    connect_ms: 30000
+    read_ms: 10000
+    write_ms: 10000
+
+  # Reconnection
+  reconnect:
+    enabled: true
+    retries: -1  # Infinite
+    retry_wait_ms: 3000
+
+  # Keep alive
+  keepalive:
+    enabled: true
+    interval_ms: 3000
+
+# Topic configuration
+topics:
+  # CDC topics pattern
+  cdc:
+    prefix: "cdc/oracle"
+    pattern: "{prefix}/{schema}/{table}/{operation}"
+
+    # Table-specific topics
+    tables:
+      - name: ORDERS
+        schema: SALES
+        operations: [insert, update, delete]
+      - name: ORDER_ITEMS
+        schema: SALES
+        operations: [insert, update, delete]
+      - name: CUSTOMERS
+        schema: SALES
+        operations: [insert, update, delete]
+      - name: PRODUCTS
+        schema: SALES
+        operations: [insert, update, delete]
+      - name: AUDIT_LOG
+        schema: SALES
+        operations: [insert]
+
+  # Dead Letter Queue
+  dlq:
+    prefix: "cdc/dlq"
+    pattern: "{prefix}/{original_table}"
+    retention_days: 7
+
+# Queue configuration (for guaranteed delivery)
+queues:
+  # Consumer queues
+  spark_consumer:
+    name: "cdc-spark-consumer"
+    max_msg_size: 10000000  # 10MB
+    max_spool_usage: 1000  # MB
+    respect_ttl: true
+
+  flink_consumer:
+    name: "cdc-flink-consumer"
+    max_msg_size: 10000000
+    max_spool_usage: 1000
+    respect_ttl: true
+
+# Message settings
+message:
+  # Delivery mode
+  delivery_mode: persistent  # persistent | direct
+
+  # TTL (time to live)
+  ttl_ms: 86400000  # 24 hours
+
+  # Priority
+  priority: 4  # 0-9, default 4

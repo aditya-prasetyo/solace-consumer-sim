@@ -1,0 +1,97 @@
+# =============================================================================
+# PostgreSQL ODS Configuration
+# =============================================================================
+
+postgres:
+  # Connection settings
+  connection:
+    host: ${POSTGRES_HOST:localhost}
+    port: ${POSTGRES_PORT:5432}
+    database: ${POSTGRES_DB:ods}
+    username: ${POSTGRES_USER:cdc_user}
+    password: ${POSTGRES_PASSWORD:cdc_pass}
+
+  # Connection pool
+  pool:
+    min_size: 2
+    max_size: 10
+    max_overflow: 5
+    pool_timeout: 30
+    pool_recycle: 1800  # 30 minutes
+
+  # Query settings
+  query:
+    echo: false
+    timeout_seconds: 30
+
+# Table configuration
+tables:
+  # CDC source tables
+  cdc_orders:
+    schema: public
+    primary_key: id
+    unique_key: [order_id, processed_at]
+
+  cdc_order_items:
+    schema: public
+    primary_key: id
+
+  cdc_order_items_extracted:
+    schema: public
+    primary_key: id
+
+  cdc_customers:
+    schema: public
+    primary_key: id
+    unique_key: [customer_id, processed_at]
+
+  cdc_products:
+    schema: public
+    primary_key: id
+    unique_key: [product_id, processed_at]
+
+  # Enriched tables
+  cdc_orders_enriched:
+    schema: public
+    primary_key: id
+
+  # Operational tables
+  cdc_audit_log:
+    schema: public
+    primary_key: id
+
+  cdc_dlq:
+    schema: public
+    primary_key: id
+
+  # Dynamic schema table
+  cdc_orders_dynamic:
+    schema: public
+    primary_key: id
+    jsonb_column: data
+
+# Batch insert settings
+batch:
+  size: 1000
+  timeout_seconds: 5
+
+# Maintenance settings
+maintenance:
+  # Partition by date (optional)
+  partitioning:
+    enabled: false
+    interval: daily
+
+  # Data retention
+  retention:
+    enabled: true
+    days: 30
+    tables:
+      - cdc_orders
+      - cdc_order_items
+      - cdc_audit_log
+
+  # Vacuum settings
+  vacuum:
+    enabled: true
+    schedule: "0 2 * * *"  # 2 AM daily

@@ -1,0 +1,18 @@
+# =============================================================================
+# REST API Requirements - Architecture B Target
+# =============================================================================
+
+-r base.txt
+
+# FastAPI
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# Pydantic for data validation
+pydantic>=2.5.3
+
+# CORS support
+# (included in FastAPI)
+
+# Async support
+anyio>=4.2.0

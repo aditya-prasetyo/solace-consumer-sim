@@ -1,0 +1,76 @@
+# =============================================================================
+# Generator Configuration - Debezium Simulator
+# =============================================================================
+
+generator:
+  # Event generation rate
+  events_per_minute: 5000
+
+  # Table distribution (percentage)
+  table_distribution:
+    ORDERS: 40
+    ORDER_ITEMS: 40
+    CUSTOMERS: 10
+    PRODUCTS: 8
+    AUDIT_LOG: 2
+
+  # Operation distribution per table (percentage)
+  operations:
+    ORDERS:
+      insert: 70
+      update: 25
+      delete: 5
+    ORDER_ITEMS:
+      insert: 80
+      update: 15
+      delete: 5
+    CUSTOMERS:
+      insert: 20
+      update: 75
+      delete: 5
+    PRODUCTS:
+      insert: 10
+      update: 85
+      delete: 5
+    AUDIT_LOG:
+      insert: 100
+      update: 0
+      delete: 0
+
+  # Debezium format settings
+  debezium:
+    connector: oracle
+    db_name: ORCL
+    schema_name: SALES
+    version: "2.4.0"
+
+  # XML generation (for SHIPPING_INFO column)
+  xml:
+    enabled: true
+    probability: 0.3  # 30% of orders have XML shipping info
+    max_items: 5
+
+  # Batch settings
+  batch:
+    size: 100
+    interval_ms: 1000
+
+solace:
+  host: ${SOLACE_HOST:localhost}
+  port: ${SOLACE_PORT:55555}
+  vpn: ${SOLACE_VPN:default}
+  username: ${SOLACE_USERNAME:admin}
+  password: ${SOLACE_PASSWORD:admin}
+
+  # Topic pattern
+  topic_prefix: "cdc/oracle"
+  topic_pattern: "${topic_prefix}/{schema}/{table}/{operation}"
+
+  # Connection settings
+  connect_timeout_ms: 30000
+  reconnect_retries: -1  # Infinite
+  reconnect_retry_wait_ms: 3000
+
+logging:
+  level: ${LOG_LEVEL:INFO}
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
