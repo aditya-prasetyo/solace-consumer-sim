@@ -1,9 +1,13 @@
 #!/bin/bash
 # =============================================================================
-# Start Infrastructure Only (Hybrid Development Mode)
+# Start CDC POC Services
 # =============================================================================
-# This script starts only the infrastructure services (Solace, PostgreSQL)
-# Use this for local development where generator runs locally
+# Usage:
+#   ./start-infra-only.sh spark                  # Infra only (hybrid dev)
+#   ./start-infra-only.sh spark with-consumer    # Infra + consumer
+#   ./start-infra-only.sh spark with-generator   # Infra + generator
+#   ./start-infra-only.sh spark full             # Infra + consumer + generator
+#   ./start-infra-only.sh flink full             # Same for flink
 # =============================================================================
 
 set -e
@@ -19,7 +23,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}CDC POC - Starting Infrastructure${NC}"
+echo -e "${GREEN}CDC POC - Starting Services${NC}"
 echo -e "${GREEN}========================================${NC}"
 
 # Check if docker is running
@@ -28,20 +32,28 @@ if ! docker info > /dev/null 2>&1; then
     exit 1
 fi
 
-# Determine which architecture to start
+# Determine which architecture and mode
 ARCH=${1:-spark}
+MODE=${2:-}
 
-if [ "$ARCH" == "spark" ]; then
-    echo -e "${YELLOW}Starting Architecture A infrastructure (Solace + PostgreSQL + REST API)...${NC}"
-    cd "$DOCKER_DIR"
-    docker compose -f docker-compose.spark.yml up -d solace postgres rest-api
-elif [ "$ARCH" == "flink" ]; then
-    echo -e "${YELLOW}Starting Architecture B infrastructure (Solace + PostgreSQL + REST API)...${NC}"
-    cd "$DOCKER_DIR"
-    docker compose -f docker-compose.flink.yml up -d solace postgres rest-api
-else
+if [ "$ARCH" != "spark" ] && [ "$ARCH" != "flink" ]; then
     echo -e "${RED}Unknown architecture: $ARCH${NC}"
-    echo "Usage: $0 [spark|flink]"
+    echo "Usage: $0 [spark|flink] [full|with-consumer|with-generator]"
+    exit 1
+fi
+
+COMPOSE_FILE="docker-compose.${ARCH}.yml"
+cd "$DOCKER_DIR"
+
+if [ -z "$MODE" ]; then
+    echo -e "${YELLOW}Mode: Hybrid (infra only — consumer & generator jalan lokal)${NC}"
+    docker compose -f "$COMPOSE_FILE" up -d solace postgres rest-api
+elif [ "$MODE" == "full" ] || [ "$MODE" == "with-consumer" ] || [ "$MODE" == "with-generator" ]; then
+    echo -e "${YELLOW}Mode: ${MODE} (infra + profile services)${NC}"
+    docker compose -f "$COMPOSE_FILE" --profile "$MODE" up -d
+else
+    echo -e "${RED}Unknown mode: $MODE${NC}"
+    echo "Usage: $0 [spark|flink] [full|with-consumer|with-generator]"
     exit 1
 fi
 
@@ -96,20 +108,35 @@ echo -e " ${GREEN}READY${NC}"
 
 echo ""
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}Infrastructure is ready!${NC}"
+echo -e "${GREEN}Services are ready!${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
 echo "Services running:"
-docker compose -f "$DOCKER_DIR/docker-compose.${ARCH}.yml" ps
+if [ -z "$MODE" ]; then
+    docker compose -f "$DOCKER_DIR/docker-compose.${ARCH}.yml" ps
+else
+    docker compose -f "$DOCKER_DIR/docker-compose.${ARCH}.yml" --profile "$MODE" ps
+fi
 echo ""
 echo "URLs:"
 echo "  - Solace Manager: http://localhost:8080 (admin/admin)"
 echo "  - PostgreSQL: localhost:5432 (cdc_user/cdc_pass)"
 echo "  - REST API Docs: http://localhost:8000/docs"
+if [ "$ARCH" == "spark" ] && ([ "$MODE" == "full" ] || [ "$MODE" == "with-consumer" ]); then
+    echo "  - Spark UI: http://localhost:4040"
+fi
+if [ "$ARCH" == "flink" ] && ([ "$MODE" == "full" ] || [ "$MODE" == "with-consumer" ]); then
+    echo "  - Flink UI: http://localhost:8081"
+fi
 echo ""
-echo -e "${YELLOW}To run generator locally:${NC}"
-echo "  cd $PROJECT_ROOT/src/generator"
-echo "  python -m venv venv && source venv/bin/activate"
-echo "  pip install -r ../../requirements/generator.txt"
-echo "  SOLACE_HOST=localhost SOLACE_PORT=55555 python main.py"
-echo ""
+if [ -z "$MODE" ]; then
+    echo -e "${YELLOW}To run consumer locally:${NC}"
+    echo "  python -m src.${ARCH}_consumer.main"
+    echo ""
+    echo -e "${YELLOW}To run generator locally:${NC}"
+    echo "  cd $PROJECT_ROOT/src/generator"
+    echo "  python -m venv venv && source venv/bin/activate"
+    echo "  pip install -r ../../requirements/generator.txt"
+    echo "  SOLACE_HOST=localhost SOLACE_PORT=55555 python main.py"
+    echo ""
+fi

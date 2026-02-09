@@ -6,6 +6,7 @@ Mock target server that receives CDC events from PySpark and PyFlink consumers
 import logging
 import os
 import random
+import re
 import time
 
 import yaml
@@ -27,11 +28,27 @@ logger = logging.getLogger(__name__)
 CONFIG_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "configs")
 
 
+def _resolve_env_vars(obj):
+    """Resolve ${VAR:default} patterns in config values using environment variables."""
+    if isinstance(obj, str):
+        def _replace(match):
+            var_name = match.group(1)
+            default = match.group(2)
+            return os.environ.get(var_name, default)
+        return re.sub(r'\$\{(\w+):([^}]*)\}', _replace, obj)
+    if isinstance(obj, dict):
+        return {k: _resolve_env_vars(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_resolve_env_vars(item) for item in obj]
+    return obj
+
+
 def _load_config() -> dict:
     config_path = os.path.join(CONFIG_DIR, "api.yaml")
     if os.path.exists(config_path):
         with open(config_path) as f:
-            return yaml.safe_load(f) or {}
+            raw = yaml.safe_load(f) or {}
+        return _resolve_env_vars(raw)
     return {}
 
 

@@ -24,7 +24,8 @@ services:
       - "8080:8080"      # SEMP Management UI
       - "8008:8008"      # Web Transport
       - "9000:9000"      # REST Messaging
-      - "5672:5672"      # AMQP
+      - "5672:5672"
+      - 5550:5550      # AMQP
     environment:
       - username_admin_globalaccesslevel=admin
       - username_admin_password=admin
@@ -40,7 +41,7 @@ services:
     networks:
       - cdc-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health-check/guaranteed-active"]
+      test: ["CMD", "curl", "-f", "http://localhost:5550/health-check/guaranteed-active"]
       interval: 30s
       timeout: 10s
       retries: 5

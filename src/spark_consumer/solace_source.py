@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from solace.messaging.messaging_service import MessagingService
 from solace.messaging.resources.topic_subscription import TopicSubscription
-from solace.messaging.receiver.message_handler import MessageHandler
+from solace.messaging.receiver import MessageHandler
 from solace.messaging.errors.pubsubplus_client_error import PubSubPlusClientError
 
 from .config import SolaceSourceConfig
