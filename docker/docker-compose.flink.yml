@@ -48,6 +48,32 @@ services:
     volumes:
       - solace-data:/var/lib/solace
 
+  postgres:
+    image: postgres:15
+    container_name: postgres-ods
+    hostname: postgres-ods
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=cdc_user
+      - POSTGRES_PASSWORD=cdc_pass
+      - POSTGRES_DB=ods
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+    volumes:
+      - ../sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - cdc-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cdc_user -d ods"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   rest-api:
     build:
       context: ..
@@ -120,6 +146,8 @@ services:
     depends_on:
       solace:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
       rest-api:
         condition: service_healthy
     environment:
@@ -128,6 +156,11 @@ services:
       - SOLACE_VPN=default
       - SOLACE_USERNAME=admin
       - SOLACE_PASSWORD=admin
+      - POSTGRES_HOST=postgres-ods
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=cdc_user
+      - POSTGRES_PASSWORD=cdc_pass
+      - POSTGRES_DB=ods
       - REST_API_URL=http://rest-api:8000
       - FLINK_TASKMANAGER_MEMORY=1600m
       - CHECKPOINT_LOCATION=/checkpoints
@@ -151,5 +184,7 @@ networks:
 volumes:
   solace-data:
     name: solace-data
+  postgres-data:
+    name: postgres-data
   flink-checkpoints:
     name: flink-checkpoints

@@ -198,124 +198,200 @@ Examples:
 
 ---
 
-## 5. Project Structure
+
+## 5. State Store & Bootstrap
+
+### 5.1 Overview
+
+Consumer service menggunakan **in-memory state store** untuk menyimpan data dimensi (CUSTOMERS, PRODUCTS) dan ORDER_ITEMS agar multi-topic join dapat dilakukan secara real-time tanpa query ulang ke database.
 
 ```
-solace_consumer_service/
-├── docs/
-│   └── BLUEPRINT_CDC_ARCHITECTURE.md
-│
-├── docker/
-│   ├── docker-compose.spark.yml        # Architecture A
-│   ├── docker-compose.flink.yml        # Architecture B
-│   ├── docker-compose.full.yml         # Both architectures
-│   └── dockerfiles/
-│       ├── Dockerfile.generator
-│       ├── Dockerfile.spark
-│       ├── Dockerfile.flink
-│       └── Dockerfile.api
-│
-├── src/
-│   ├── generator/                         # Supports LOCAL & CONTAINER mode
-│   │   ├── __init__.py
-│   │   ├── main.py
-│   │   ├── config.py                      # Environment-aware config
-│   │   ├── debezium_simulator.py
-│   │   ├── models/
-│   │   │   ├── __init__.py
-│   │   │   ├── order.py
-│   │   │   ├── order_item.py
-│   │   │   ├── customer.py
-│   │   │   ├── product.py
-│   │   │   └── audit_log.py
-│   │   └── publishers/
-│   │       ├── __init__.py
-│   │       └── solace_publisher.py
-│   │
-│   ├── spark_consumer/                  # Architecture A
-│   │   ├── __init__.py
-│   │   ├── main.py
-│   │   ├── config.py
-│   │   ├── consumer.py
-│   │   ├── transformations/
-│   │   │   ├── __init__.py
-│   │   │   ├── order_enrichment.py       # 3-way join
-│   │   │   ├── xml_extractor.py          # XML column extraction
-│   │   │   └── schema_handler.py         # Dynamic schema
-│   │   └── writers/
-│   │       ├── __init__.py
-│   │       └── postgres_writer.py
-│   │
-│   ├── flink_consumer/                  # Architecture B
-│   │   ├── __init__.py
-│   │   ├── main.py
-│   │   ├── config.py
-│   │   ├── consumer.py
-│   │   ├── processors/
-│   │   │   ├── __init__.py
-│   │   │   ├── order_enrichment.py       # Stream join
-│   │   │   ├── xml_extractor.py          # XML column extraction
-│   │   │   └── alert_handler.py
-│   │   └── sinks/
-│   │       ├── __init__.py
-│   │       └── rest_sink.py
-│   │
-│   ├── rest_api/                        # Architecture B target
-│   │   ├── __init__.py
-│   │   ├── main.py
-│   │   ├── routes/
-│   │   │   ├── __init__.py
-│   │   │   ├── events.py
-│   │   │   └── notifications.py
-│   │   └── models/
-│   │       └── schemas.py
-│   │
-│   └── common/
-│       ├── __init__.py
-│       ├── config.py
-│       ├── schemas.py
-│       └── utils.py
-│
-├── configs/
-│   ├── generator.yaml
-│   ├── solace.yaml
-│   ├── spark.yaml
-│   ├── flink.yaml
-│   ├── postgres.yaml
-│   └── api.yaml
-│
-├── scripts/
-│   ├── start-spark-arch.sh             # Start Architecture A (full)
-│   ├── start-flink-arch.sh             # Start Architecture B (full)
-│   ├── start-infra-only.sh             # Start infrastructure only (hybrid mode)
-│   ├── start-generator-local.sh        # Run generator locally (hybrid mode)
-│   ├── start-all.sh                    # Start both
-│   ├── stop-all.sh
-│   └── init-solace.sh
-│
-├── sql/
-│   └── init.sql                        # PostgreSQL init script
-│
-├── tests/
-│   ├── test_generator.py
-│   ├── test_spark_consumer.py
-│   ├── test_flink_consumer.py
-│   └── test_rest_api.py
-│
-├── requirements/
-│   ├── base.txt
-│   ├── generator.txt
-│   ├── spark.txt
-│   ├── flink.txt
-│   └── api.txt
-│
-├── .env.example
-├── pyproject.toml
-└── README.md
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         STATE STORE ARCHITECTURE                             │
+│                                                                             │
+│  ┌───────────────┐     ┌──────────────────────────────────────────────┐    │
+│  │               │     │              IN-MEMORY STATE                  │    │
+│  │    Solace      │     │  ┌──────────────────┐  ┌──────────────────┐ │    │
+│  │    Messages    │────▶│  │ DimensionState   │  │ DimensionState   │ │    │
+│  │               │     │  │ (CUSTOMERS)      │  │ (PRODUCTS)       │ │    │
+│  └───────────────┘     │  │ key: customer_id │  │ key: product_id  │ │    │
+│                         │  └──────────────────┘  └──────────────────┘ │    │
+│                         │  ┌──────────────────┐                       │    │
+│                         │  │ OrderItemsState  │                       │    │
+│                         │  │ key: order_id    │                       │    │
+│                         │  │ value: [items]   │                       │    │
+│                         │  └──────────────────┘                       │    │
+│                         └──────────────────────────────────────────────┘    │
+│                                      │                                      │
+│                                      ▼                                      │
+│                         ┌──────────────────────┐                           │
+│                         │    3-WAY JOIN         │                           │
+│                         │  ORDER + CUSTOMER     │                           │
+│                         │  + PRODUCT            │                           │
+│                         └──────────────────────┘                           │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### 5.2 DimensionStateStore
+
+State store generik untuk dimension tables (CUSTOMERS, PRODUCTS). Satu instance per dimension table.
+
+**Karakteristik:**
+
+| Property | Value | Keterangan |
+|----------|-------|------------|
+| Data Structure | `Dict[key, StateEntry]` | Keyed dictionary |
+| Lookup | O(1) | Hash-based |
+| Deduplication | Auto (by key) | Latest value per key wins |
+| TTL | 3600 seconds (default) | Configurable per store |
+| Expiry Check | Setiap 500 updates | Periodic, bukan per-access |
+
+**API:**
+
+```python
+class DimensionStateStore:
+    def __init__(self, name: str, ttl_seconds: int = 3600)
+    def put(self, key, data: dict) -> None      # Upsert by key
+    def get(self, key) -> Optional[dict]         # Get, None if expired
+    def get_all() -> Dict[key, dict]             # All non-expired entries
+    def get_all_values() -> List[dict]           # For DataFrame creation
+    def remove(self, key) -> None                # Delete specific key
+    def expire() -> int                          # Manual expiry, returns count
+    def size() -> int                            # Current entry count
+    def clear() -> None                          # Remove all entries
+```
+
+### 5.3 OrderItemsStateStore
+
+State store khusus untuk ORDER_ITEMS yang mengelompokkan items berdasarkan `order_id`.
+
+**Karakteristik:**
+
+| Property | Value | Keterangan |
+|----------|-------|------------|
+| Data Structure | `Dict[order_id, List[item]]` | Grouped by order |
+| Max Items/Order | 100 | Trim ke 50 jika melebihi |
+| TTL | 3600 seconds | Per-order group |
+| Expiry Check | Setiap 500 updates | Periodic cleanup |
+
+**API:**
+
+```python
+class OrderItemsStateStore:
+    def __init__(self, ttl_seconds: int = 3600)
+    def add_item(self, order_id: int, item: dict)  # Append item to order
+    def get_items(self, order_id: int) -> List[dict] # All items for order
+    def get_item_count(self, order_id: int) -> int
+    def get_all_items_flat() -> List[dict]           # Flat list for DataFrame
+    def expire() -> int
+    def size() -> int                                 # Unique order count
+    def total_items() -> int                          # Total items across orders
+```
+
+### 5.4 Bootstrap dari PostgreSQL
+
+Saat consumer startup/restart, state store di-bootstrap dari PostgreSQL ODS agar data dimensi langsung tersedia tanpa menunggu CDC events masuk.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         BOOTSTRAP FLOW                                       │
+│                                                                             │
+│  ┌─────────────────┐     ┌─────────────────────────────────────────────┐   │
+│  │   PostgreSQL    │     │           STATE STORES                       │   │
+│  │   (ODS)         │     │                                             │   │
+│  │  ┌───────────┐  │     │  ┌─────────────────┐                       │   │
+│  │  │cdc_       │──┼────▶│  │ customer_store  │  DISTINCT ON          │   │
+│  │  │customers  │  │     │  │ (latest/key)    │  (customer_id)        │   │
+│  │  └───────────┘  │     │  └─────────────────┘                       │   │
+│  │  ┌───────────┐  │     │  ┌─────────────────┐                       │   │
+│  │  │cdc_       │──┼────▶│  │ product_store   │  DISTINCT ON          │   │
+│  │  │products   │  │     │  │ (latest/key)    │  (product_id)         │   │
+│  │  └───────────┘  │     │  └─────────────────┘                       │   │
+│  │  ┌───────────┐  │     │  ┌─────────────────┐                       │   │
+│  │  │cdc_order_ │──┼────▶│  │ order_items     │  Last 1 hour          │   │
+│  │  │items      │  │     │  │ store           │  of items             │   │
+│  │  └───────────┘  │     │  └─────────────────┘                       │   │
+│  └─────────────────┘     └─────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Bootstrap Queries:**
+
+```sql
+-- Load customers (latest per customer_id)
+SELECT DISTINCT ON (customer_id)
+    customer_id, name, email, tier, region, created_at
+FROM cdc_customers
+ORDER BY customer_id, source_ts DESC NULLS LAST;
+
+-- Load products (latest per product_id)
+SELECT DISTINCT ON (product_id)
+    product_id, name, category, price, stock_qty, is_active
+FROM cdc_products
+ORDER BY product_id, source_ts DESC NULLS LAST;
+
+-- Load recent order items (last 1 hour)
+SELECT item_id, order_id, product_id, quantity, unit_price, subtotal
+FROM cdc_order_items
+WHERE source_ts >= NOW() - INTERVAL '1 hour'
+   OR source_ts IS NULL
+ORDER BY order_id, item_id;
+```
+
+**Error Handling:** Jika bootstrap gagal (PostgreSQL belum ready), consumer tetap start dengan state kosong dan akan terisi secara inkremental dari CDC events.
+
+### 5.5 State Store vs Checkpointing
+
+| Aspect | State Store | Checkpointing |
+|--------|-------------|---------------|
+| **Fungsi** | Menyimpan data dimensi untuk join | Menyimpan posisi consumer di message broker |
+| **Sifat** | Volatile (hilang saat restart) | Persistent (disimpan ke disk) |
+| **Recovery** | Bootstrap dari PostgreSQL | Resume dari offset terakhir |
+| **Data** | CUSTOMERS, PRODUCTS, ORDER_ITEMS | Topic offset, partition ID |
+| **Lokasi** | In-memory (Python dict) | File system / checkpoint dir |
+| **Update** | Setiap CDC event masuk | Periodic (setiap N messages) |
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    CRASH RECOVERY FLOW                                       │
+│                                                                             │
+│  Consumer Crash → Restart                                                   │
+│       │                                                                     │
+│       ├──▶ 1. Load checkpoint → resume dari offset terakhir                │
+│       │                                                                     │
+│       ├──▶ 2. Bootstrap state store dari PostgreSQL                        │
+│       │       • Customers: semua (DISTINCT ON)                              │
+│       │       • Products: semua (DISTINCT ON)                               │
+│       │       • Order Items: 1 jam terakhir                                 │
+│       │                                                                     │
+│       └──▶ 3. Resume processing → state terus di-update dari CDC events    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 5.6 Memory Management
+
+| Mekanisme | Konfigurasi | Tujuan |
+|-----------|-------------|--------|
+| TTL Expiry | 3600s default | Hapus data lama otomatis |
+| Periodic Cleanup | Setiap 500 updates | Hindari memory leak |
+| Bounded Collections | Max 100 items/order | Cegah unbounded growth |
+| Trim Strategy | Trim ke 50 saat > 100 | Keep recent items |
+
+**Estimasi Memory Usage (5K events/min):**
+
+| Store | Est. Entries | Entry Size | Total |
+|-------|-------------|------------|-------|
+| Customers | ~1,000 | ~500 bytes | ~500 KB |
+| Products | ~500 | ~400 bytes | ~200 KB |
+| Order Items | ~5,000 orders | ~2 KB/order | ~10 MB |
+| **Total** | | | **~11 MB** |
+
+> Sangat ringan untuk in-memory. TTL memastikan data lama otomatis dibersihkan.
 
 ---
-
 ## 6. Docker Compose Configurations
 
 > **🔄 HYBRID MODE SUPPORT**
@@ -326,204 +402,9 @@ solace_consumer_service/
 >
 > Gunakan `profiles` untuk kontrol lebih granular.
 
-### 6.1 Architecture A: docker-compose.spark.yml
-
-```yaml
-version: '3.8'
-
-services:
-  # ============================================
-  # INFRASTRUCTURE (Always running)
-  # ============================================
-  solace:
-    image: solace/solace-pubsub-standard:latest
-    container_name: solace
-    ports:
-      - "55555:55555"    # SMF - exposed untuk local generator
-      - "8080:8080"      # SEMP Management
-      - "8008:8008"      # Web Transport
-      - "9000:9000"      # REST
-    environment:
-      - username_admin_globalaccesslevel=admin
-      - username_admin_password=admin
-    shm_size: 1g
-    networks:
-      - cdc-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-
-  postgres:
-    image: postgres:15
-    container_name: postgres-ods
-    ports:
-      - "5432:5432"      # Exposed untuk local access
-    environment:
-      - POSTGRES_USER=cdc_user
-      - POSTGRES_PASSWORD=cdc_pass
-      - POSTGRES_DB=ods
-    volumes:
-      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql
-      - postgres-data:/var/lib/postgresql/data
-    networks:
-      - cdc-network
-
-  # ============================================
-  # GENERATOR (Optional - use profiles)
-  # For local development: comment out or use --profile
-  # ============================================
-  generator:
-    profiles: ["full", "with-generator"]    # Only starts with --profile full
-    build:
-      context: .
-      dockerfile: docker/dockerfiles/Dockerfile.generator
-    container_name: cdc-generator
-    depends_on:
-      solace:
-        condition: service_healthy
-    environment:
-      - SOLACE_HOST=solace
-      - SOLACE_PORT=55555
-      - EVENTS_PER_MINUTE=5000
-    networks:
-      - cdc-network
-
-  # ============================================
-  # CONSUMER (Architecture A)
-  # ============================================
-  spark-consumer:
-    build:
-      context: .
-      dockerfile: docker/dockerfiles/Dockerfile.spark
-    container_name: spark-consumer
-    ports:
-      - "4040:4040"
-    depends_on:
-      solace:
-        condition: service_healthy
-      postgres:
-        condition: service_started
-    environment:
-      - SOLACE_HOST=solace
-      - POSTGRES_HOST=postgres-ods
-      - POSTGRES_PORT=5432
-      - POSTGRES_USER=cdc_user
-      - POSTGRES_PASSWORD=cdc_pass
-      - POSTGRES_DB=ods
-    networks:
-      - cdc-network
-
-networks:
-  cdc-network:
-    driver: bridge
-
-volumes:
-  postgres-data:
-```
-
-**Usage:**
-```bash
-# Development (tanpa generator container)
-docker compose -f docker/docker-compose.spark.yml up -d
-
-# Integration/Demo (dengan generator container)
-docker compose -f docker/docker-compose.spark.yml --profile full up -d
-```
-
-### 6.2 Architecture B: docker-compose.flink.yml
-
-```yaml
-version: '3.8'
-
-services:
-  # ============================================
-  # INFRASTRUCTURE (Always running)
-  # ============================================
-  solace:
-    image: solace/solace-pubsub-standard:latest
-    container_name: solace
-    ports:
-      - "55555:55555"    # SMF - exposed untuk local generator
-      - "8080:8080"      # SEMP Management
-      - "8008:8008"      # Web Transport
-      - "9000:9000"      # REST
-    environment:
-      - username_admin_globalaccesslevel=admin
-      - username_admin_password=admin
-    shm_size: 1g
-    networks:
-      - cdc-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-
-  rest-api:
-    build:
-      context: .
-      dockerfile: docker/dockerfiles/Dockerfile.api
-    container_name: rest-api
-    ports:
-      - "8000:8000"      # Exposed untuk testing
-    networks:
-      - cdc-network
-
-  # ============================================
-  # GENERATOR (Optional - use profiles)
-  # ============================================
-  generator:
-    profiles: ["full", "with-generator"]
-    build:
-      context: .
-      dockerfile: docker/dockerfiles/Dockerfile.generator
-    container_name: cdc-generator
-    depends_on:
-      solace:
-        condition: service_healthy
-    environment:
-      - SOLACE_HOST=solace
-      - SOLACE_PORT=55555
-      - EVENTS_PER_MINUTE=5000
-    networks:
-      - cdc-network
-
-  # ============================================
-  # CONSUMER (Architecture B)
-  # ============================================
-  flink-consumer:
-    build:
-      context: .
-      dockerfile: docker/dockerfiles/Dockerfile.flink
-    container_name: flink-consumer
-    ports:
-      - "8081:8081"
-    depends_on:
-      solace:
-        condition: service_healthy
-      rest-api:
-        condition: service_started
-    environment:
-      - SOLACE_HOST=solace
-      - REST_API_URL=http://rest-api:8000
-    networks:
-      - cdc-network
-
-networks:
-  cdc-network:
-    driver: bridge
-```
-
-**Usage:**
-```bash
-# Development (tanpa generator container)
-docker compose -f docker/docker-compose.flink.yml up -d
-
-# Integration/Demo (dengan generator container)
-docker compose -f docker/docker-compose.flink.yml --profile full up -d
-```
+> **Note:** Lihat file docker-compose aktual di `docker/docker-compose.spark.yml` dan `docker/docker-compose.flink.yml`.
+> Kedua architecture menggunakan **dual sink** (PostgreSQL + REST API).
+> Untuk panduan menjalankan, lihat [README.md](../README.md).
 
 ---
 
@@ -643,7 +524,7 @@ CREATE TABLE cdc_order_items (
     processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Order Items Extracted (dari XML parsing - Section 23)
+-- Order Items Extracted (dari XML parsing - Section 20)
 CREATE TABLE cdc_order_items_extracted (
     id SERIAL PRIMARY KEY,
     order_id INT NOT NULL,
@@ -731,162 +612,56 @@ POST /api/v1/notifications
 
 ## 10. Implementation Phases
 
-### Phase 1: Infrastructure Setup
-- [ ] Setup base Docker configurations
-- [ ] Configure Solace container dengan topics
-- [ ] Setup PostgreSQL dengan init scripts
-- [ ] Setup FastAPI mock server
-- [ ] Test connectivity antar containers
+### Phase 1: Infrastructure Setup ✅
+- [x] Setup base Docker configurations
+- [x] Configure Solace container dengan topics
+- [x] Setup PostgreSQL dengan init scripts
+- [x] Setup FastAPI mock server
+- [x] Test connectivity antar containers
 
-### Phase 2: Data Generator
-- [ ] Implement Debezium format models
-- [ ] Implement Solace publisher
-- [ ] Create data generators untuk 5 tables (ORDERS, ORDER_ITEMS, CUSTOMERS, PRODUCTS, AUDIT_LOG)
-- [ ] Add configurable event rates dan patterns
-- [ ] Dockerize generator
+### Phase 2: Data Generator ✅
+- [x] Implement Debezium format models
+- [x] Implement Solace publisher
+- [x] Create data generators untuk 5 tables (ORDERS, ORDER_ITEMS, CUSTOMERS, PRODUCTS, AUDIT_LOG)
+- [x] Add configurable event rates dan patterns
+- [x] Dockerize generator
 
-### Phase 3: Architecture A - PySpark
-- [ ] Setup PySpark dengan Solace connector
-- [ ] Implement stream consumer
-- [ ] Create transformations (aggregation, windowing)
-- [ ] Implement PostgreSQL sink
-- [ ] Dockerize spark-consumer
+### Phase 3: Architecture A - PySpark ✅
+- [x] Setup PySpark dengan Solace connector
+- [x] Implement stream consumer with dual sink (PostgreSQL + REST API)
+- [x] Create transformations (CDC parsing, 3-way join, XML extraction)
+- [x] Implement PostgreSQL + REST API sinks with circuit breaker
+- [x] DLQ handler, state store, crash recovery
+- [x] Dockerize spark-consumer
 
-### Phase 4: Architecture B - PyFlink
-- [ ] Setup PyFlink environment
-- [ ] Implement Solace source
-- [ ] Create event processors
-- [ ] Implement REST API sink
-- [ ] Dockerize flink-consumer
+### Phase 4: Architecture B - PyFlink ✅
+- [x] Setup PyFlink environment
+- [x] Implement Solace source
+- [x] Create event processors (CDC, enrichment, XML extraction)
+- [x] Implement dual sink: PostgreSQL + REST API
+- [x] DLQ handler, state store, crash recovery
+- [x] Dockerize flink-consumer
 
-### Phase 5: Integration & Testing
-- [ ] End-to-end testing per architecture
-- [ ] Cross-architecture testing
-- [ ] Performance benchmarking
-- [ ] Documentation finalization
-
----
-
-## 11. Running the POC
-
-### 11.1 Development Workflow (Hybrid Mode)
-
-> **Rekomendasi:** Gunakan Hybrid Mode untuk development - generator berjalan local, infrastructure di container.
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         HYBRID DEVELOPMENT WORKFLOW                          │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  Phase              │ Generator     │ Infrastructure │ Command             │
-│  ───────────────────┼───────────────┼────────────────┼──────────────────── │
-│  Development        │ LOCAL         │ Docker         │ start-infra-only   │
-│  Integration Test   │ CONTAINER     │ Docker         │ --profile full     │
-│  Demo/Benchmark     │ CONTAINER     │ Docker         │ --profile full     │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### 11.2 Option A: Hybrid Mode (Development)
-
-```bash
-# Step 1: Start infrastructure only
-docker compose -f docker/docker-compose.spark.yml up -d solace postgres spark-consumer
-
-# Step 2: Setup local generator environment
-cd src/generator
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# atau: venv\Scripts\activate  # Windows
-pip install -r ../../requirements/generator.txt
-
-# Step 3: Run generator locally
-export SOLACE_HOST=localhost
-export SOLACE_PORT=55555
-export EVENTS_PER_MINUTE=1000  # Lower untuk development
-python main.py
-```
-
-**Keuntungan Hybrid Mode:**
-- ✅ Fast iteration (no rebuild)
-- ✅ Easy debugging (IDE breakpoints)
-- ✅ Lower memory usage
-- ✅ Real-time code changes
-
-### 11.3 Option B: Full Container Mode (Integration/Demo)
-
-```bash
-# Architecture A: Full container mode
-docker compose -f docker/docker-compose.spark.yml --profile full up -d
-
-# Architecture B: Full container mode
-docker compose -f docker/docker-compose.flink.yml --profile full up -d
-```
-
-### 11.4 Helper Scripts
-
-```bash
-# Development (Hybrid Mode)
-./scripts/start-infra-only.sh        # Start Solace + Postgres/API only
-./scripts/start-generator-local.sh   # Run generator in local Python
-
-# Integration/Demo (Full Container)
-./scripts/start-spark-arch.sh        # Architecture A with generator
-./scripts/start-flink-arch.sh        # Architecture B with generator
-
-# Both Architectures (Not recommended for 16GB RAM)
-./scripts/start-all.sh
-```
-
-### 11.5 Generator Configuration
-
-```python
-# src/generator/config.py
-import os
-
-class Config:
-    # Connection - auto-detect local vs container
-    SOLACE_HOST = os.getenv("SOLACE_HOST", "localhost")
-    SOLACE_PORT = int(os.getenv("SOLACE_PORT", "55555"))
-    SOLACE_VPN = os.getenv("SOLACE_VPN", "default")
-    SOLACE_USERNAME = os.getenv("SOLACE_USERNAME", "admin")
-    SOLACE_PASSWORD = os.getenv("SOLACE_PASSWORD", "admin")
-
-    # Rate control
-    EVENTS_PER_MINUTE = int(os.getenv("EVENTS_PER_MINUTE", "5000"))
-
-    # Distribution (percentage)
-    TABLE_DISTRIBUTION = {
-        "ORDERS": 40,
-        "ORDER_ITEMS": 40,
-        "CUSTOMERS": 10,
-        "PRODUCTS": 8,
-        "AUDIT_LOG": 2
-    }
-```
-
-### 11.6 Monitoring URLs
-
-| Service | URL | Architecture |
-|---------|-----|--------------|
-| Solace Manager | http://localhost:8080 | Both |
-| Spark UI | http://localhost:4040 | A |
-| Flink UI | http://localhost:8081 | B |
-| REST API Docs | http://localhost:8000/docs | B |
-| PostgreSQL | localhost:5432 | A |
+### Phase 5: Testing ✅
+- [x] 220 unit tests (PySpark: 62, PyFlink: 96, REST API: 28, State Store: 21)
+- [x] All tests passing
 
 ---
 
-## 12. Use Case & Performance Requirements
+> **Note:** Untuk panduan instalasi, deployment, dan menjalankan POC, lihat [README.md](../README.md).
 
-### 12.1 Target Performance
+---
+
+## 11. Use Case & Performance Requirements
+
+### 11.1 Target Performance
 
 | Metric | Target | Per Second |
 |--------|--------|------------|
 | Event Throughput | 5,000 events/menit | ~83 events/sec |
 | Peak Load (2x buffer) | 10,000 events/menit | ~167 events/sec |
 
-### 12.2 Transformation Complexity
+### 11.2 Transformation Complexity
 
 Consumer service akan melakukan **multi-topic join** yang melibatkan 3 topic:
 
@@ -915,7 +690,7 @@ Consumer service akan melakukan **multi-topic join** yang melibatkan 3 topic:
 > **Note:** Untuk full enrichment dengan ORDER_ITEMS detail, menjadi 4-way join.
 > Core validation tetap 3-way: ORDERS ↔ CUSTOMERS ↔ PRODUCTS.
 
-### 12.3 Simulasi vs Real Case
+### 11.3 Simulasi vs Real Case
 
 | Aspect | Real Case | Simulasi POC | Justifikasi |
 |--------|-----------|--------------|-------------|
@@ -926,9 +701,9 @@ Consumer service akan melakukan **multi-topic join** yang melibatkan 3 topic:
 
 ---
 
-## 13. Rekomendasi Simulasi: 5 Table vs 20 Table
+## 12. Rekomendasi Simulasi: 5 Table vs 20 Table
 
-### 13.1 Analisis: Apakah 5 Table Cukup?
+### 12.1 Analisis: Apakah 5 Table Cukup?
 
 **✅ YA, 5 table CUKUP untuk POC dengan syarat:**
 
@@ -950,7 +725,7 @@ Consumer service akan melakukan **multi-topic join** yang melibatkan 3 topic:
    - Jika 5 topic @1000 events/min works → 20 topic @250 events/min juga works
    - Yang penting: total throughput dan join pattern
 
-### 13.2 Rekomendasi: 5 Table dengan Distribusi Realistis
+### 12.2 Rekomendasi: 5 Table dengan Distribusi Realistis
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -970,7 +745,7 @@ Consumer service akan melakukan **multi-topic join** yang melibatkan 3 topic:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 13.3 Kenapa Distribusi Ini Realistis?
+### 12.3 Kenapa Distribusi Ini Realistis?
 
 | Pattern | Penjelasan |
 |---------|------------|
@@ -978,7 +753,7 @@ Consumer service akan melakukan **multi-topic join** yang melibatkan 3 topic:
 | **Low-volume tables** (CUSTOMERS, PRODUCTS) | Master/dimension data, jarang update |
 | **Mixed workload** | Kombinasi INSERT heavy + UPDATE moderate |
 
-### 13.4 Yang Perlu Divalidasi di POC
+### 12.4 Yang Perlu Divalidasi di POC
 
 | # | Validation Point | Success Criteria |
 |---|------------------|------------------|
@@ -990,9 +765,9 @@ Consumer service akan melakukan **multi-topic join** yang melibatkan 3 topic:
 
 ---
 
-## 14. Detailed Table Schemas untuk Simulasi
+## 13. Detailed Table Schemas untuk Simulasi
 
-### 14.1 ORDERS (High Volume - Primary)
+### 13.1 ORDERS (High Volume - Primary)
 
 ```json
 {
@@ -1005,7 +780,7 @@ Consumer service akan melakukan **multi-topic join** yang melibatkan 3 topic:
     "ORDER_DATE": "TIMESTAMP",
     "STATUS": "VARCHAR2(20)",
     "TOTAL_AMOUNT": "NUMBER(15,2)",
-    "SHIPPING_INFO": "CLOB",          // XML column untuk extraction (Section 23)
+    "SHIPPING_INFO": "CLOB",          // XML column untuk extraction (Section 20)
     "CREATED_AT": "TIMESTAMP",
     "UPDATED_AT": "TIMESTAMP"
   }
@@ -1015,7 +790,7 @@ Consumer service akan melakukan **multi-topic join** yang melibatkan 3 topic:
 > **Note:** Kolom `SHIPPING_INFO` berisi XML data yang akan di-extract ke table terpisah.
 > Ini berbeda dengan table `ORDER_ITEMS` yang merupakan table normalized terpisah.
 
-### 14.2 ORDER_ITEMS (High Volume - Primary)
+### 13.2 ORDER_ITEMS (High Volume - Primary)
 
 ```json
 {
@@ -1033,7 +808,7 @@ Consumer service akan melakukan **multi-topic join** yang melibatkan 3 topic:
 }
 ```
 
-### 14.3 CUSTOMERS (Low Volume - Dimension)
+### 13.3 CUSTOMERS (Low Volume - Dimension)
 
 ```json
 {
@@ -1051,7 +826,7 @@ Consumer service akan melakukan **multi-topic join** yang melibatkan 3 topic:
 }
 ```
 
-### 14.4 PRODUCTS (Low Volume - Dimension)
+### 13.4 PRODUCTS (Low Volume - Dimension)
 
 ```json
 {
@@ -1069,7 +844,7 @@ Consumer service akan melakukan **multi-topic join** yang melibatkan 3 topic:
 }
 ```
 
-### 14.5 AUDIT_LOG (Low Volume - Reference)
+### 13.5 AUDIT_LOG (Low Volume - Reference)
 
 ```json
 {
@@ -1089,9 +864,9 @@ Consumer service akan melakukan **multi-topic join** yang melibatkan 3 topic:
 
 ---
 
-## 15. Transformation Use Cases
+## 14. Transformation Use Cases
 
-### 15.1 Architecture A (PySpark) - Multi-Topic Join
+### 14.1 Architecture A (PySpark) - Multi-Topic Join
 
 **Use Case: Order Enrichment dengan Customer & Product Data**
 
@@ -1129,7 +904,7 @@ enriched_orders = (
 enriched_orders.writeStream.format("jdbc")...
 ```
 
-### 15.2 Architecture B (PyFlink) - Real-time Alerting
+### 14.2 Architecture B (PyFlink) - Real-time Alerting
 
 **Use Case: High-Value Order Detection**
 
@@ -1162,9 +937,9 @@ alerts.add_sink(RestApiSink(...))
 
 ---
 
-## 16. Benchmark Scenarios
+## 15. Benchmark Scenarios
 
-### 16.1 Scenario Matrix
+### 15.1 Scenario Matrix
 
 | Scenario | Events/min | Tables | Join | Duration | Purpose |
 |----------|------------|--------|------|----------|---------|
@@ -1174,7 +949,7 @@ alerts.add_sink(RestApiSink(...))
 | **Sustained** | 5,000 | 5 | 3-way | 60 min | Stability test |
 | **Recovery** | 5,000 | 5 | 3-way | - | Restart during load |
 
-### 16.2 Success Metrics
+### 15.2 Success Metrics
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
@@ -1195,7 +970,7 @@ alerts.add_sink(RestApiSink(...))
 
 ---
 
-## 17. Rekomendasi Akhir
+## 16. Rekomendasi Akhir
 
 ### ✅ Gunakan 5 Table untuk POC
 
@@ -1220,9 +995,9 @@ Jika ingin extra confidence, tambahkan scenario:
 
 ---
 
-## 18. Failure Scenarios (WAJIB)
+## 17. Failure Scenarios (WAJIB)
 
-### 18.1 Overview
+### 17.1 Overview
 
 POC **WAJIB** menghandle semua common failure scenarios untuk memvalidasi production-readiness.
 
@@ -1253,9 +1028,9 @@ POC **WAJIB** menghandle semua common failure scenarios untuk memvalidasi produc
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 18.2 Consumer Failure Handling
+### 17.2 Consumer Failure Handling
 
-#### 18.2.1 Consumer Crash/Restart
+#### 17.2.1 Consumer Crash/Restart
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
@@ -1287,7 +1062,7 @@ env.get_checkpoint_config().set_checkpoint_storage_dir("file:///checkpoints/flin
 3. Restart consumer
 4. Verify: No duplicate, no data loss
 
-#### 18.2.2 Processing Timeout
+#### 17.2.2 Processing Timeout
 
 ```yaml
 # Retry Policy Configuration
@@ -1303,9 +1078,9 @@ dead_letter:
   include_error_metadata: true
 ```
 
-### 18.3 Broker (Solace) Failure Handling
+### 17.3 Broker (Solace) Failure Handling
 
-#### 18.3.1 Auto-Reconnect
+#### 17.3.1 Auto-Reconnect
 
 ```python
 # Solace Connection with Reconnect
@@ -1319,7 +1094,7 @@ solace_config = {
 }
 ```
 
-#### 18.3.2 Backpressure Handling
+#### 17.3.2 Backpressure Handling
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -1336,9 +1111,9 @@ solace_config = {
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 18.4 Target System Failure Handling
+### 17.4 Target System Failure Handling
 
-#### 18.4.1 PostgreSQL (Architecture A)
+#### 17.4.1 PostgreSQL (Architecture A)
 
 ```python
 # Circuit Breaker Pattern
@@ -1366,7 +1141,7 @@ class PostgresWriter:
 | Constraint violation | DLQ | 0 |
 | Disk full | Alert + Stop | 0 |
 
-#### 18.4.2 REST API (Architecture B)
+#### 17.4.2 REST API (Architecture B)
 
 ```python
 # Async HTTP Client with Retry
@@ -1394,9 +1169,9 @@ class RestApiSink:
         return False
 ```
 
-### 18.5 Data Failure Handling
+### 17.5 Data Failure Handling
 
-#### 18.5.1 Dead Letter Queue (DLQ) Architecture
+#### 17.5.1 Dead Letter Queue (DLQ) Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -1423,7 +1198,7 @@ class RestApiSink:
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### 18.5.2 DLQ Message Format
+#### 17.5.2 DLQ Message Format
 
 ```json
 {
@@ -1442,7 +1217,7 @@ class RestApiSink:
 }
 ```
 
-### 18.6 Failure Test Scenarios
+### 17.6 Failure Test Scenarios
 
 | # | Scenario | How to Simulate | Expected Result | Priority |
 |---|----------|-----------------|-----------------|----------|
@@ -1457,7 +1232,7 @@ class RestApiSink:
 | F9 | Slow consumer | Add artificial delay | Queue buildup, then recover | **WAJIB** |
 | F10 | Late data | Send out-of-order events | Watermark handling | **WAJIB** |
 
-### 18.7 Monitoring & Alerting untuk Failure
+### 17.7 Monitoring & Alerting untuk Failure
 
 ```yaml
 # Alert Rules
@@ -1485,9 +1260,9 @@ alerts:
 
 ---
 
-## 19. Distributed Processing (OPSIONAL)
+## 18. Distributed Processing (OPSIONAL)
 
-### 19.1 Overview
+### 18.1 Overview
 
 Untuk extra scalability validation, arsitektur dapat di-extend dengan distributed processing.
 
@@ -1511,7 +1286,7 @@ Untuk extra scalability validation, arsitektur dapat di-extend dengan distribute
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 19.2 PySpark Distributed Mode
+### 18.2 PySpark Distributed Mode
 
 #### docker-compose.spark-distributed.yml
 
@@ -1571,7 +1346,7 @@ services:
       - cdc-network
 ```
 
-### 19.3 PyFlink Distributed Mode
+### 18.3 PyFlink Distributed Mode
 
 #### docker-compose.flink-distributed.yml
 
@@ -1615,7 +1390,7 @@ services:
       - cdc-network
 ```
 
-### 19.4 Partitioning Strategy
+### 18.4 Partitioning Strategy
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -1634,7 +1409,7 @@ services:
 
 **Benefit:** Events dengan key yang sama akan diproses oleh partition/worker yang sama, mengurangi shuffle untuk join operations.
 
-### 19.5 State Management untuk Distributed Join
+### 18.5 State Management untuk Distributed Join
 
 ```python
 # PyFlink - Keyed State untuk Join
@@ -1670,7 +1445,7 @@ class OrderCustomerJoinFunction(KeyedCoProcessFunction):
         self.pending_orders.clear()
 ```
 
-### 19.6 Distributed Mode Test Scenarios
+### 18.6 Distributed Mode Test Scenarios
 
 | # | Scenario | Purpose | Priority |
 |---|----------|---------|----------|
@@ -1680,7 +1455,7 @@ class OrderCustomerJoinFunction(KeyedCoProcessFunction):
 | D4 | Scale down (remove worker) | Graceful degradation | OPSIONAL |
 | D5 | 4 workers, 20K events/min | High throughput | OPSIONAL |
 
-### 19.7 Kapan Perlu Distributed?
+### 18.7 Kapan Perlu Distributed?
 
 | Kondisi | Rekomendasi |
 |---------|-------------|
@@ -1692,49 +1467,9 @@ class OrderCustomerJoinFunction(KeyedCoProcessFunction):
 
 ---
 
-## 20. Implementation Checklist
+## 19. Dynamic Schema Evolution (WAJIB)
 
-### 20.1 WAJIB (Must Have)
-
-- [ ] Basic CDC event generation (5 tables)
-- [ ] Solace publish/subscribe
-- [ ] PySpark consumer dengan 3-way join
-- [ ] PyFlink consumer dengan enrichment
-- [ ] PostgreSQL sink
-- [ ] REST API sink
-- [ ] Checkpoint/recovery mechanism
-- [ ] DLQ implementation
-- [ ] All 10 failure scenarios (F1-F10)
-- [ ] Basic monitoring/logging
-
-### 20.2 OPSIONAL (Nice to Have)
-
-- [ ] Distributed Spark cluster
-- [ ] Distributed Flink cluster
-- [ ] Dynamic scaling test
-- [ ] 20K+ events/min stress test
-- [ ] Advanced monitoring (Prometheus/Grafana)
-- [ ] Auto-recovery scripts
-
----
-
-## 21. Next Steps
-
-Setelah blueprint disetujui:
-
-1. ✅ Finalisasi arsitektur (5 table, 5K events/min, 3-way join)
-2. Setup development environment
-3. Mulai Phase 1: Infrastructure Setup
-4. Parallel development Phase 2 & Phase 3/4
-5. Run benchmark scenarios (Section 16)
-6. **Run ALL failure scenarios (Section 18)** ← WAJIB
-7. Optional: Setup distributed mode (Section 19)
-
----
-
-## 22. Dynamic Schema Evolution (WAJIB)
-
-### 22.1 Requirement
+### 19.1 Requirement
 
 CDC events dari Oracle mungkin mengalami schema changes:
 - **Kolom baru ditambahkan** → Consumer harus otomatis menyesuaikan
@@ -1755,7 +1490,7 @@ CDC events dari Oracle mungkin mengalami schema changes:
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 22.2 Implementation Strategy
+### 19.2 Implementation Strategy
 
 #### Schema-on-Read Approach
 
@@ -1777,7 +1512,7 @@ CDC events dari Oracle mungkin mengalami schema changes:
 2. **Schema inference** - Detect schema dari incoming messages
 3. **Flexible target storage** - JSONB atau dynamic DDL
 
-### 22.3 PySpark Implementation
+### 19.3 PySpark Implementation
 
 ```python
 from pyspark.sql.types import MapType, StringType
@@ -1843,7 +1578,7 @@ def dynamic_join(orders_df, customers_df):
     return joined
 ```
 
-### 22.4 PyFlink Implementation
+### 19.4 PyFlink Implementation
 
 ```python
 from pyflink.common.typeinfo import Types
@@ -1883,7 +1618,7 @@ dynamic_stream = stream.map(
 )
 ```
 
-### 22.5 Target Storage Strategy
+### 19.5 Target Storage Strategy
 
 #### Option A: PostgreSQL dengan JSONB (Recommended untuk POC)
 
@@ -1961,7 +1696,7 @@ class DynamicTableManager:
         self.column_cache[cache_key] = True
 ```
 
-### 22.6 REST API Target (Architecture B)
+### 19.6 REST API Target (Architecture B)
 
 ```python
 class DynamicRestApiSink:
@@ -1983,7 +1718,7 @@ class DynamicRestApiSink:
         await self.http_client.post(self.endpoint, json=payload)
 ```
 
-### 22.7 Schema Change Detection & Logging
+### 19.7 Schema Change Detection & Logging
 
 ```python
 class SchemaChangeDetector:
@@ -2015,7 +1750,7 @@ class SchemaChangeDetector:
         }
 ```
 
-### 22.8 Schema Evolution Test Scenarios
+### 19.8 Schema Evolution Test Scenarios
 
 | # | Scenario | Test Steps | Expected Result | Priority |
 |---|----------|------------|-----------------|----------|
@@ -2026,7 +1761,7 @@ class SchemaChangeDetector:
 | S5 | Nested JSON added | Add address: {city, zip} | Stored as JSONB | **WAJIB** |
 | S6 | Join with new column | New column used in enrichment | Join still works | **WAJIB** |
 
-### 22.9 Transformation dengan Dynamic Schema
+### 19.9 Transformation dengan Dynamic Schema
 
 ```python
 def dynamic_aggregation(df):
@@ -2058,9 +1793,9 @@ def dynamic_aggregation(df):
 
 ---
 
-## 23. XML Column Extraction (WAJIB)
+## 20. XML Column Extraction (WAJIB)
 
-### 23.1 Requirement
+### 20.1 Requirement
 
 Beberapa table memiliki kolom yang berisi **XML data** yang perlu di-extract menjadi table terpisah.
 
@@ -2068,7 +1803,7 @@ Beberapa table memiliki kolom yang berisi **XML data** yang perlu di-extract men
 >
 > | Source | Table | Description |
 > |--------|-------|-------------|
-> | **CDC Table** | `cdc_order_items` | Dari Oracle table ORDER_ITEMS (Section 14.2) - normalized data |
+> | **CDC Table** | `cdc_order_items` | Dari Oracle table ORDER_ITEMS (Section 13.2) - normalized data |
 > | **XML Extraction** | `cdc_order_items_extracted` | Dari kolom ORDERS.SHIPPING_INFO XML - denormalized/legacy data |
 >
 > POC ini men-demonstrasikan **KEDUA** skenario untuk memvalidasi fleksibilitas arsitektur.
@@ -2106,7 +1841,7 @@ Beberapa table memiliki kolom yang berisi **XML data** yang perlu di-extract men
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 23.2 XML Column Examples
+### 20.2 XML Column Examples
 
 #### Example 1: Order Items dalam XML
 
@@ -2143,7 +1878,7 @@ Beberapa table memiliki kolom yang berisi **XML data** yang perlu di-extract men
 </addresses>
 ```
 
-### 23.3 Debezium Simulator - XML Handling
+### 20.3 Debezium Simulator - XML Handling
 
 ```json
 {
@@ -2165,7 +1900,7 @@ Beberapa table memiliki kolom yang berisi **XML data** yang perlu di-extract men
 }
 ```
 
-### 23.4 PySpark XML Extraction
+### 20.4 PySpark XML Extraction
 
 ```python
 from pyspark.sql.functions import explode, col
@@ -2264,7 +1999,7 @@ def process_orders_with_xml(orders_stream):
         .start()
 ```
 
-### 23.5 PyFlink XML Extraction
+### 20.5 PyFlink XML Extraction
 
 ```python
 from pyflink.datastream import MapFunction, FlatMapFunction
@@ -2317,36 +2052,12 @@ normal_items.add_sink(RestApiSink(endpoint="/api/v1/order-items"))
 dlq_items.add_sink(DLQSink())
 ```
 
-### 23.6 Target Schema untuk Extracted Data
+### 20.6 Target Schema untuk Extracted Data
+
+> **Note:** Schema untuk `cdc_orders` dan `cdc_order_items_extracted` sudah didefinisikan di Section 9.1.
+> Di bawah ini hanya schema tambahan khusus untuk XML extraction.
 
 ```sql
--- Original orders (cleaned, tanpa XML column)
-CREATE TABLE cdc_orders (
-    id SERIAL PRIMARY KEY,
-    order_id INT NOT NULL,
-    customer_id INT,
-    order_date TIMESTAMP,
-    total_amount DECIMAL(15,2),
-    status VARCHAR(50),
-    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Extracted from XML (new table)
-CREATE TABLE cdc_order_items_extracted (
-    id SERIAL PRIMARY KEY,
-    order_id INT NOT NULL,              -- FK to cdc_orders
-    product_id INT,
-    quantity INT,
-    unit_price DECIMAL(10,2),
-    subtotal DECIMAL(15,2),
-    extracted_from VARCHAR(50),         -- 'ORDER_DETAILS_XML'
-    source_event_ts TIMESTAMP,
-    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Index for join performance
-CREATE INDEX idx_order_items_order_id ON cdc_order_items_extracted(order_id);
-
 -- Extracted addresses (if applicable)
 CREATE TABLE cdc_customer_addresses_extracted (
     id SERIAL PRIMARY KEY,
@@ -2360,7 +2071,7 @@ CREATE TABLE cdc_customer_addresses_extracted (
 );
 ```
 
-### 23.7 XML Extraction Configuration
+### 20.7 XML Extraction Configuration
 
 ```yaml
 xml_extraction:
@@ -2393,7 +2104,7 @@ xml_extraction:
     missing_attributes: NULL        # NULL | DEFAULT | FAIL
 ```
 
-### 23.8 Data Flow dengan XML Extraction
+### 20.8 Data Flow dengan XML Extraction
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -2433,7 +2144,7 @@ xml_extraction:
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 23.9 XML Extraction Test Scenarios
+### 20.9 XML Extraction Test Scenarios
 
 | # | Scenario | Test Data | Expected Result | Priority |
 |---|----------|-----------|-----------------|----------|
@@ -2446,7 +2157,7 @@ xml_extraction:
 | X7 | NULL XML column | ORDER_DETAILS is NULL | Skip extraction, no error | **WAJIB** |
 | X8 | Unicode in XML | Non-ASCII characters | Properly encoded | **WAJIB** |
 
-### 23.10 Performance Consideration
+### 20.10 Performance Consideration
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -2470,7 +2181,7 @@ xml_extraction:
 
 ---
 
-## 24. Configuration Defaults (RESOLVED)
+## 21. Configuration Defaults (RESOLVED)
 
 Semua open questions sudah di-resolve dengan default values:
 
@@ -2483,9 +2194,9 @@ Semua open questions sudah di-resolve dengan default values:
 
 ---
 
-## 25. Updated Implementation Checklist
+## 22. Implementation Checklist
 
-### 25.1 WAJIB (Must Have)
+### 22.1 WAJIB (Must Have)
 
 - [ ] Basic CDC event generation (5 tables)
 - [ ] Solace publish/subscribe
@@ -2500,7 +2211,7 @@ Semua open questions sudah di-resolve dengan default values:
 - [ ] **XML column extraction (X1-X8)** ← NEW
 - [ ] Basic monitoring/logging
 
-### 25.2 OPSIONAL (Nice to Have)
+### 22.2 OPSIONAL (Nice to Have)
 
 - [ ] Distributed Spark cluster
 - [ ] Distributed Flink cluster
@@ -2512,9 +2223,9 @@ Semua open questions sudah di-resolve dengan default values:
 
 ---
 
-## 26. Resource Requirements
+## 23. Resource Requirements
 
-### 26.1 POC Environment (Local Development)
+### 23.1 POC Environment (Local Development)
 
 **Minimum Spec untuk PC dengan RAM 16GB, Storage 100GB:**
 
@@ -2622,7 +2333,7 @@ services:
       - FLINK_PROPERTIES=taskmanager.memory.process.size: 1600m
 ```
 
-### 26.2 Rekomendasi untuk PC 16GB RAM
+### 23.2 Rekomendasi untuk PC 16GB RAM
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -2647,7 +2358,7 @@ services:
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 26.3 Storage Breakdown (100GB Available)
+### 23.3 Storage Breakdown (100GB Available)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -2670,7 +2381,7 @@ services:
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 26.4 Production Environment
+### 23.4 Production Environment
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -2704,7 +2415,7 @@ services:
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 26.5 Scaling Guidelines
+### 23.5 Scaling Guidelines
 
 | Throughput | Spark Workers | Flink TaskManagers | PostgreSQL | Solace |
 |------------|---------------|---------------------|------------|--------|
@@ -2713,7 +2424,7 @@ services:
 | 50K/min | 4 | 4 | 8 GB RAM | 8 GB RAM |
 | 100K+/min | 8+ | 8+ | 16+ GB RAM | Enterprise |
 
-### 26.6 POC vs Production Comparison
+### 23.6 POC vs Production Comparison
 
 | Aspect | POC (16GB PC) | Production |
 |--------|---------------|------------|
@@ -2726,7 +2437,7 @@ services:
 | **Checkpoints** | Local filesystem | S3 / HDFS |
 | **Throughput** | 5K-10K/min | 50K+/min |
 
-### 26.7 Quick Start Commands (Memory-Optimized)
+### 23.7 Quick Start Commands (Memory-Optimized)
 
 ```bash
 # Check available resources
@@ -2748,7 +2459,7 @@ docker system prune -a
 
 ---
 
-## 27. Next Steps
+## 24. Next Steps
 
 Setelah blueprint disetujui:
 
@@ -2757,15 +2468,15 @@ Setelah blueprint disetujui:
 3. Setup development environment
 4. Mulai Phase 1: Infrastructure Setup
 5. Parallel development Phase 2 & Phase 3/4
-6. Run benchmark scenarios (Section 16)
-7. **Run ALL failure scenarios (Section 18)** ← WAJIB
-8. **Run ALL schema evolution scenarios (Section 22)** ← WAJIB
-9. **Run ALL XML extraction scenarios (Section 23)** ← WAJIB
-10. Optional: Setup distributed mode (Section 19)
+6. Run benchmark scenarios (Section 15)
+7. **Run ALL failure scenarios (Section 17)** ← WAJIB
+8. **Run ALL schema evolution scenarios (Section 19)** ← WAJIB
+9. **Run ALL XML extraction scenarios (Section 20)** ← WAJIB
+10. Optional: Setup distributed mode (Section 18)
 
 ---
 
-## 28. Document History
+## 25. Document History
 
 | Version | Date | Changes |
 |---------|------|---------|
@@ -2777,9 +2488,11 @@ Setelah blueprint disetujui:
 | 1.5 | 2024-02-04 | Added XML column extraction to new table (WAJIB) |
 | 1.6 | 2025-02-04 | Fixed conflicts: section numbering, ORDER_ITEMS ambiguity, PostgreSQL tables, EMPLOYEES→CUSTOMERS example, resource recommendations |
 | 1.7 | 2025-02-04 | Added Hybrid Development Workflow for generator (local + container modes) |
+| 2.0 | 2025-02-10 | All phases implemented. Consolidated docs: operational content moved to README.md, blueprint focused on design & specs only |
+| 2.1 | 2025-02-10 | Added State Store & Bootstrap design section. Removed duplicate sections (Implementation Checklist, Next Steps). Cleaned up duplicate table schemas. Fixed cross-references |
 
 ---
 
-*Document Version: 1.7*
-*Last Updated: 2025-02-04*
-*Status: DRAFT - Ready for Implementation*
+*Document Version: 2.1*
+*Last Updated: 2025-02-10*
+*Status: IMPLEMENTED - All Phases Complete*

@@ -32,13 +32,13 @@ fi
 ARCH=${1:-spark}
 
 if [ "$ARCH" == "spark" ]; then
-    echo -e "${YELLOW}Starting Architecture A infrastructure (Solace + PostgreSQL)...${NC}"
+    echo -e "${YELLOW}Starting Architecture A infrastructure (Solace + PostgreSQL + REST API)...${NC}"
     cd "$DOCKER_DIR"
-    docker compose -f docker-compose.spark.yml up -d solace postgres
+    docker compose -f docker-compose.spark.yml up -d solace postgres rest-api
 elif [ "$ARCH" == "flink" ]; then
-    echo -e "${YELLOW}Starting Architecture B infrastructure (Solace + REST API)...${NC}"
+    echo -e "${YELLOW}Starting Architecture B infrastructure (Solace + PostgreSQL + REST API)...${NC}"
     cd "$DOCKER_DIR"
-    docker compose -f docker-compose.flink.yml up -d solace rest-api
+    docker compose -f docker-compose.flink.yml up -d solace postgres rest-api
 else
     echo -e "${RED}Unknown architecture: $ARCH${NC}"
     echo "Usage: $0 [spark|flink]"
@@ -64,39 +64,35 @@ until curl -s http://localhost:8080/health-check/guaranteed-active > /dev/null 2
 done
 echo -e " ${GREEN}READY${NC}"
 
-if [ "$ARCH" == "spark" ]; then
-    # Wait for PostgreSQL to be ready
-    echo -n "Waiting for PostgreSQL..."
-    counter=0
-    until docker exec postgres-ods pg_isready -U cdc_user -d ods > /dev/null 2>&1; do
-        sleep 2
-        counter=$((counter + 2))
-        if [ $counter -ge $timeout ]; then
-            echo -e " ${RED}TIMEOUT${NC}"
-            echo "PostgreSQL did not become healthy in time"
-            exit 1
-        fi
-        echo -n "."
-    done
-    echo -e " ${GREEN}READY${NC}"
-fi
+# Wait for PostgreSQL to be ready (both architectures use dual sink)
+echo -n "Waiting for PostgreSQL..."
+counter=0
+until docker exec postgres-ods pg_isready -U cdc_user -d ods > /dev/null 2>&1; do
+    sleep 2
+    counter=$((counter + 2))
+    if [ $counter -ge $timeout ]; then
+        echo -e " ${RED}TIMEOUT${NC}"
+        echo "PostgreSQL did not become healthy in time"
+        exit 1
+    fi
+    echo -n "."
+done
+echo -e " ${GREEN}READY${NC}"
 
-if [ "$ARCH" == "flink" ]; then
-    # Wait for REST API to be ready
-    echo -n "Waiting for REST API..."
-    counter=0
-    until curl -s http://localhost:8000/health > /dev/null 2>&1; do
-        sleep 2
-        counter=$((counter + 2))
-        if [ $counter -ge $timeout ]; then
-            echo -e " ${RED}TIMEOUT${NC}"
-            echo "REST API did not become healthy in time"
-            exit 1
-        fi
-        echo -n "."
-    done
-    echo -e " ${GREEN}READY${NC}"
-fi
+# Wait for REST API to be ready (both architectures use dual sink)
+echo -n "Waiting for REST API..."
+counter=0
+until curl -s http://localhost:8000/health > /dev/null 2>&1; do
+    sleep 2
+    counter=$((counter + 2))
+    if [ $counter -ge $timeout ]; then
+        echo -e " ${RED}TIMEOUT${NC}"
+        echo "REST API did not become healthy in time"
+        exit 1
+    fi
+    echo -n "."
+done
+echo -e " ${GREEN}READY${NC}"
 
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -108,11 +104,8 @@ docker compose -f "$DOCKER_DIR/docker-compose.${ARCH}.yml" ps
 echo ""
 echo "URLs:"
 echo "  - Solace Manager: http://localhost:8080 (admin/admin)"
-if [ "$ARCH" == "spark" ]; then
-    echo "  - PostgreSQL: localhost:5432 (cdc_user/cdc_pass)"
-else
-    echo "  - REST API Docs: http://localhost:8000/docs"
-fi
+echo "  - PostgreSQL: localhost:5432 (cdc_user/cdc_pass)"
+echo "  - REST API Docs: http://localhost:8000/docs"
 echo ""
 echo -e "${YELLOW}To run generator locally:${NC}"
 echo "  cd $PROJECT_ROOT/src/generator"
