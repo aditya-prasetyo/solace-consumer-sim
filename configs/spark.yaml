@@ -75,6 +75,13 @@ postgres:
     size: 1000
     interval_seconds: 5
 
+# REST API sink configuration (second sink)
+rest_api:
+  enabled: false
+  base_url: ${REST_API_URL:http://localhost:8000}
+  timeout: 10
+  consumer_id: "spark-consumer-1"
+
 # Transformation settings
 transformation:
   # 3-way join configuration

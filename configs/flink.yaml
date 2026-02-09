@@ -62,7 +62,23 @@ solace:
   # Queue for guaranteed delivery
   queue: "cdc-flink-consumer"
 
-# REST API sink configuration
+# PostgreSQL sink configuration (ODS - first sink)
+postgres:
+  host: ${POSTGRES_HOST:localhost}
+  port: ${POSTGRES_PORT:5432}
+  database: ${POSTGRES_DB:ods}
+  username: ${POSTGRES_USER:cdc_user}
+  password: ${POSTGRES_PASSWORD:cdc_pass}
+
+  # Batch settings
+  batch:
+    size: 500
+    interval_seconds: 5
+
+  # Enable/disable
+  enabled: true
+
+# REST API sink configuration (second sink)
 rest_api:
   url: ${REST_API_URL:http://localhost:8000}
 
