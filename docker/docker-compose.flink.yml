@@ -1,7 +1,7 @@
 version: '3.8'
 
 # =============================================================================
-# CDC Architecture POC - Architecture B (PyFlink → REST API)
+# CDC Architecture POC - Architecture B (PyFlink → PostgreSQL + REST API)
 # =============================================================================
 # Usage:
 #   Development (Hybrid Mode):
