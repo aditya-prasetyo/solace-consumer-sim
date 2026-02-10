@@ -50,7 +50,9 @@ class CDCGenerator:
         self.generators: Dict[str, BaseTableGenerator] = {
             "ORDERS": OrderGenerator(
                 xml_enabled=config.generator.xml_enabled,
-                xml_probability=config.generator.xml_probability
+                xml_probability=config.generator.xml_probability,
+                schema_evolution=config.generator.schema_evolution,
+                evolution_probability=config.generator.evolution_probability,
             ),
             "ORDER_ITEMS": OrderItemGenerator(),
             "CUSTOMERS": CustomerGenerator(),

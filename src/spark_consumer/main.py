@@ -57,7 +57,7 @@ class SparkCDCConsumer:
         self.source = SolaceSource(config.solace)
         self.writer = PostgresWriter(config.postgres, config.error_handling)
         self.dlq_handler = DLQHandler(config.error_handling.dlq)
-        self.schema_handler = SchemaHandler()
+        self.schema_handler = SchemaHandler(writer=self.writer)
         self.cdc_processor = CDCProcessor(self.spark)
         self.xml_extractor = XMLExtractor(self.spark, config.xml.column)
         self.joiner = StreamJoiner(self.spark, config.join)
@@ -135,6 +135,9 @@ class SparkCDCConsumer:
             logger.error("Failed to connect to PostgreSQL, exiting")
             self.source.disconnect()
             sys.exit(1)
+
+        # Load column mappings from cdc_schema_registry (falls back to hardcoded)
+        self.writer.load_mappings_from_db()
 
         # Bootstrap dimension state from PostgreSQL (crash recovery)
         self._bootstrap_state()

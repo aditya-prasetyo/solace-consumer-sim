@@ -92,14 +92,29 @@ def _spark_type(type_name: str):
 class SchemaHandler:
     """Handles dynamic schema evolution for CDC events"""
 
-    def __init__(self):
+    # Map Python inferred types to Oracle-style type strings for registry
+    _PYTHON_TO_ORACLE_TYPE = {
+        "int": "NUMBER(10)",
+        "long": "NUMBER(19)",
+        "double": "NUMBER(15,4)",
+        "string": "VARCHAR2(255)",
+        "boolean": "NUMBER(1)",
+        "timestamp": "TIMESTAMP",
+    }
+
+    def __init__(self, writer=None):
         self._seen_columns: Dict[str, Set[str]] = {}
         self._column_types: Dict[str, Dict[str, str]] = {}
+        self._writer = writer  # Optional PostgresWriter for registry writes
 
         # Initialize with known schemas
         for table, columns in KNOWN_SCHEMAS.items():
             self._seen_columns[table] = {col for col, _ in columns}
             self._column_types[table] = {col: dtype for col, dtype in columns}
+
+    def set_writer(self, writer) -> None:
+        """Set the PostgresWriter reference for registry writes"""
+        self._writer = writer
 
     def get_known_columns(self, table: str) -> Set[str]:
         """Get known columns for a table"""
@@ -129,6 +144,20 @@ class SchemaHandler:
                     f"Schema evolution: new column '{col}' ({inferred_type}) "
                     f"detected in table '{table}'"
                 )
+
+                # Auto-register to cdc_schema_registry (is_active=false)
+                if self._writer is not None:
+                    oracle_type = self._PYTHON_TO_ORACLE_TYPE.get(
+                        inferred_type, "VARCHAR2(255)"
+                    )
+                    try:
+                        self._writer.register_schema_column(
+                            table, col, oracle_type
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to register {table}.{col} to schema registry: {e}"
+                        )
 
         return new_columns
 

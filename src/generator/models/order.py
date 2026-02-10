@@ -18,10 +18,27 @@ class OrderGenerator(BaseTableGenerator):
 
     STATUSES = ["PENDING", "CONFIRMED", "SHIPPED", "DELIVERED", "CANCELLED"]
 
-    def __init__(self, xml_enabled: bool = True, xml_probability: float = 0.3):
+    # Schema evolution: extra columns that may appear (simulating Oracle DDL changes)
+    EXTRA_COLUMNS_POOL = [
+        ("DISCOUNT_CODE", lambda: fake.bothify("???-####").upper()),
+        ("DISCOUNT_PERCENT", lambda: round(random.uniform(5, 30), 1)),
+        ("LOYALTY_POINTS", lambda: random.randint(10, 5000)),
+        ("SALES_CHANNEL", lambda: random.choice(["WEB", "MOBILE", "POS", "API"])),
+        ("PRIORITY", lambda: random.choice(["LOW", "NORMAL", "HIGH", "URGENT"])),
+    ]
+
+    def __init__(
+        self,
+        xml_enabled: bool = True,
+        xml_probability: float = 0.3,
+        schema_evolution: bool = False,
+        evolution_probability: float = 0.15,
+    ):
         super().__init__("ORDERS")
         self.xml_enabled = xml_enabled
         self.xml_probability = xml_probability
+        self.schema_evolution = schema_evolution
+        self.evolution_probability = evolution_probability
         self._customer_ids = list(range(1, 1001))  # Pre-generated customer IDs
 
     def generate_insert(self) -> Dict[str, Any]:
@@ -42,6 +59,15 @@ class OrderGenerator(BaseTableGenerator):
         # Add XML shipping info occasionally
         if self.xml_enabled and random.random() < self.xml_probability:
             data["SHIPPING_INFO"] = self._generate_shipping_xml()
+
+        # Schema evolution: add extra columns occasionally
+        if self.schema_evolution and random.random() < self.evolution_probability:
+            extras = random.sample(
+                self.EXTRA_COLUMNS_POOL,
+                k=random.randint(1, min(3, len(self.EXTRA_COLUMNS_POOL)))
+            )
+            for col_name, gen_fn in extras:
+                data[col_name] = gen_fn()
 
         self._store_record(order_id, data)
         return data

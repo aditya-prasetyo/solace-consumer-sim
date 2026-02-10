@@ -59,6 +59,14 @@ class GeneratorConfig:
     xml_probability: float = 0.3  # 30% of orders have XML shipping info
     xml_max_items: int = 5
 
+    # Schema evolution simulation
+    schema_evolution: bool = field(
+        default_factory=lambda: os.getenv("SCHEMA_EVOLUTION", "false").lower() == "true"
+    )
+    evolution_probability: float = field(
+        default_factory=lambda: float(os.getenv("EVOLUTION_PROBABILITY", "0.15"))
+    )
+
     # Batch settings
     batch_size: int = 100
     batch_interval_ms: int = 1000

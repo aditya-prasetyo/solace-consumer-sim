@@ -226,6 +226,134 @@ class TestPostgresWriterDLQ:
         assert result is True
 
 
+class TestSchemaRegistryWrite:
+    """Test register_schema_column (auto-INSERT with is_active=false)"""
+
+    @patch.object(PostgresWriter, '_ensure_connection', return_value=True)
+    def test_register_schema_column_success(self, mock_conn, writer):
+        mock_cursor = MagicMock()
+        mock_context = MagicMock()
+        mock_context.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_context.__exit__ = MagicMock(return_value=False)
+
+        writer._conn = MagicMock()
+        writer._conn.closed = False
+        writer._conn.cursor.return_value = mock_context
+
+        result = writer.register_schema_column("ORDERS", "DISCOUNT_CODE", "VARCHAR2(50)")
+
+        assert result is True
+        mock_cursor.execute.assert_called_once()
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "INSERT INTO cdc_schema_registry" in sql
+        assert "is_active" in sql
+
+        params = mock_cursor.execute.call_args[0][1]
+        assert params == ("ORDERS", "DISCOUNT_CODE", "VARCHAR2(50)")
+
+        writer._conn.commit.assert_called_once()
+
+    @patch.object(PostgresWriter, '_ensure_connection', return_value=False)
+    def test_register_schema_column_no_connection(self, mock_conn, writer):
+        result = writer.register_schema_column("ORDERS", "DISCOUNT_CODE", "VARCHAR2(50)")
+        assert result is False
+
+    @patch.object(PostgresWriter, '_ensure_connection', return_value=True)
+    def test_register_schema_column_db_error(self, mock_conn, writer):
+        import psycopg2
+        mock_cursor = MagicMock()
+        mock_cursor.execute.side_effect = psycopg2.Error("DB error")
+        mock_context = MagicMock()
+        mock_context.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_context.__exit__ = MagicMock(return_value=False)
+
+        writer._conn = MagicMock()
+        writer._conn.closed = False
+        writer._conn.cursor.return_value = mock_context
+
+        result = writer.register_schema_column("ORDERS", "NEW_COL", "NUMBER(10)")
+        assert result is False
+        writer._conn.rollback.assert_called_once()
+
+
+class TestLoadMappingsFromDB:
+    """Test load_mappings_from_db (startup loading from cdc_schema_registry)"""
+
+    @patch.object(PostgresWriter, '_ensure_connection', return_value=True)
+    def test_load_mappings_success(self, mock_conn, writer):
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = [
+            ("ORDERS", "ORDER_ID", "cdc_orders", "order_id"),
+            ("ORDERS", "CUSTOMER_ID", "cdc_orders", "customer_id"),
+            ("ORDERS", "TOTAL_AMOUNT", "cdc_orders", "total_amount"),
+            ("CUSTOMERS", "CUSTOMER_ID", "cdc_customers", "customer_id"),
+            ("CUSTOMERS", "TIER", "cdc_customers", "tier"),
+        ]
+        mock_context = MagicMock()
+        mock_context.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_context.__exit__ = MagicMock(return_value=False)
+
+        writer._conn = MagicMock()
+        writer._conn.closed = False
+        writer._conn.cursor.return_value = mock_context
+
+        result = writer.load_mappings_from_db()
+
+        assert result is True
+        # Verify CDC_TO_PG_COLUMN_MAP was updated
+        assert CDC_TO_PG_COLUMN_MAP["ORDERS"]["ORDER_ID"] == "order_id"
+        assert CDC_TO_PG_COLUMN_MAP["CUSTOMERS"]["CUSTOMER_ID"] == "customer_id"
+        # Verify TABLE_COLUMNS was updated
+        assert "order_id" in TABLE_COLUMNS["cdc_orders"]
+        assert "customer_id" in TABLE_COLUMNS["cdc_customers"]
+        # Verify metadata columns added
+        assert "source_ts" in TABLE_COLUMNS["cdc_orders"]
+        assert "operation" in TABLE_COLUMNS["cdc_orders"]
+
+    @patch.object(PostgresWriter, '_ensure_connection', return_value=True)
+    def test_load_mappings_empty_result(self, mock_conn, writer):
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = []
+        mock_context = MagicMock()
+        mock_context.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_context.__exit__ = MagicMock(return_value=False)
+
+        writer._conn = MagicMock()
+        writer._conn.closed = False
+        writer._conn.cursor.return_value = mock_context
+
+        result = writer.load_mappings_from_db()
+        assert result is False  # Falls back to hardcoded
+
+    @patch.object(PostgresWriter, '_ensure_connection', return_value=False)
+    def test_load_mappings_no_connection(self, mock_conn, writer):
+        result = writer.load_mappings_from_db()
+        assert result is False
+
+    @patch.object(PostgresWriter, '_ensure_connection', return_value=True)
+    def test_load_mappings_preserves_non_registry_tables(self, mock_conn, writer):
+        """Ensure tables like cdc_dlq and cdc_orders_dynamic are preserved"""
+        original_dlq = TABLE_COLUMNS["cdc_dlq"].copy()
+        original_dynamic = TABLE_COLUMNS["cdc_orders_dynamic"].copy()
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = [
+            ("ORDERS", "ORDER_ID", "cdc_orders", "order_id"),
+        ]
+        mock_context = MagicMock()
+        mock_context.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_context.__exit__ = MagicMock(return_value=False)
+
+        writer._conn = MagicMock()
+        writer._conn.closed = False
+        writer._conn.cursor.return_value = mock_context
+
+        writer.load_mappings_from_db()
+
+        assert TABLE_COLUMNS["cdc_dlq"] == original_dlq
+        assert TABLE_COLUMNS["cdc_orders_dynamic"] == original_dynamic
+
+
 class TestPostgresWriterStats:
 
     def test_initial_stats(self, writer):

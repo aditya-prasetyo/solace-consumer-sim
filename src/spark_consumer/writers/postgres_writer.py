@@ -432,6 +432,111 @@ class PostgresWriter:
             logger.error(f"Failed to write dynamic record: {e}")
             return False
 
+    def register_schema_column(
+        self,
+        table_name: str,
+        column_name: str,
+        column_type: str
+    ) -> bool:
+        """
+        Auto-register a newly detected column to cdc_schema_registry.
+        Inserts with is_active=false (pending DBA review).
+        """
+        if not self._ensure_connection():
+            logger.error("Cannot register schema column - no connection")
+            return False
+
+        try:
+            sql = """
+                INSERT INTO cdc_schema_registry
+                    (table_name, column_name, column_type, is_active)
+                VALUES (%s, %s, %s, false)
+                ON CONFLICT (table_name, column_name) DO NOTHING
+            """
+            with self._conn.cursor() as cur:
+                cur.execute(sql, (table_name, column_name, column_type))
+            self._conn.commit()
+            logger.info(
+                f"Schema registry: registered new column "
+                f"{table_name}.{column_name} ({column_type}) [is_active=false]"
+            )
+            return True
+        except Exception as e:
+            if self._conn and not self._conn.closed:
+                self._conn.rollback()
+            logger.error(f"Failed to register schema column: {e}")
+            return False
+
+    def load_mappings_from_db(self) -> bool:
+        """
+        Load TABLE_COLUMNS and CDC_TO_PG_COLUMN_MAP from cdc_schema_registry.
+        Only loads columns where is_active=true and pg_column_name IS NOT NULL.
+        Updates the module-level dicts in place.
+        """
+        if not self._ensure_connection():
+            logger.warning("Cannot load mappings from DB - no connection, using hardcoded defaults")
+            return False
+
+        try:
+            sql = """
+                SELECT table_name, column_name, pg_table_name, pg_column_name
+                FROM cdc_schema_registry
+                WHERE is_active = true
+                  AND pg_table_name IS NOT NULL
+                  AND pg_column_name IS NOT NULL
+                ORDER BY table_name, id
+            """
+            with self._conn.cursor() as cur:
+                cur.execute(sql)
+                rows = cur.fetchall()
+
+            if not rows:
+                logger.warning("No active mappings in cdc_schema_registry, using hardcoded defaults")
+                return False
+
+            # Build new mappings
+            new_table_columns: Dict[str, List[str]] = {}
+            new_cdc_map: Dict[str, Dict[str, str]] = {}
+
+            for source_table, cdc_col, pg_table, pg_col in rows:
+                # Build CDC_TO_PG_COLUMN_MAP: {"ORDERS": {"ORDER_ID": "order_id"}}
+                if source_table not in new_cdc_map:
+                    new_cdc_map[source_table] = {}
+                new_cdc_map[source_table][cdc_col] = pg_col
+
+                # Build TABLE_COLUMNS: {"cdc_orders": ["order_id", ...]}
+                if pg_table not in new_table_columns:
+                    new_table_columns[pg_table] = []
+                if pg_col not in new_table_columns[pg_table]:
+                    new_table_columns[pg_table].append(pg_col)
+
+            # Add CDC metadata columns (source_ts, operation) to source tables
+            for pg_table in new_table_columns:
+                if pg_table not in ("cdc_orders_enriched", "cdc_order_aggregations"):
+                    for meta_col in ("source_ts", "operation"):
+                        if meta_col not in new_table_columns[pg_table]:
+                            new_table_columns[pg_table].append(meta_col)
+
+            # Update module-level dicts (preserve non-registry tables like dlq, dynamic, enriched)
+            for source_table, mapping in new_cdc_map.items():
+                CDC_TO_PG_COLUMN_MAP[source_table] = mapping
+
+            for pg_table, columns in new_table_columns.items():
+                TABLE_COLUMNS[pg_table] = columns
+
+            logger.info(
+                f"Loaded mappings from DB: {len(new_cdc_map)} source tables, "
+                f"{len(new_table_columns)} PG tables, "
+                f"{sum(len(v) for v in new_cdc_map.values())} column mappings"
+            )
+            return True
+
+        except Exception as e:
+            if self._conn and not self._conn.closed:
+                self._conn.rollback()
+            logger.error(f"Failed to load mappings from DB: {e}, using hardcoded defaults")
+            return False
+
     def get_stats(self) -> Dict[str, Any]:
         """Get writer statistics"""
         return {

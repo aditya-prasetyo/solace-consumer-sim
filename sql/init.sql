@@ -201,15 +201,17 @@ CREATE INDEX idx_cdc_orders_dynamic_data ON cdc_orders_dynamic USING GIN (data);
 -- METADATA TABLES
 -- =============================================================================
 
--- Schema Registry (track schema changes)
+-- Schema Registry (track schema changes + PG mapping)
 CREATE TABLE IF NOT EXISTS cdc_schema_registry (
     id SERIAL PRIMARY KEY,
-    table_name VARCHAR(100) NOT NULL,
-    column_name VARCHAR(100) NOT NULL,
-    column_type VARCHAR(50),
-    first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    is_active BOOLEAN DEFAULT true,
+    table_name VARCHAR(100) NOT NULL,       -- Oracle CDC source table (uppercase)
+    column_name VARCHAR(100) NOT NULL,       -- Oracle CDC column name (uppercase)
+    column_type VARCHAR(50),                 -- Oracle data type
+    pg_table_name VARCHAR(100),              -- Target PostgreSQL table (NULL = not yet mapped)
+    pg_column_name VARCHAR(100),             -- Target PostgreSQL column (NULL = not yet mapped)
+    detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    promoted_at TIMESTAMP,                   -- When DBA set is_active = true
+    is_active BOOLEAN DEFAULT false,         -- false = detected but not promoted, true = ready
     CONSTRAINT uq_schema_registry UNIQUE (table_name, column_name)
 );
 
@@ -293,29 +295,43 @@ GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO cdc_user;
 -- Initial Data (optional - for testing)
 -- =============================================================================
 
--- Insert some sample metadata
-INSERT INTO cdc_schema_registry (table_name, column_name, column_type) VALUES
-    ('ORDERS', 'ORDER_ID', 'NUMBER(10)'),
-    ('ORDERS', 'CUSTOMER_ID', 'NUMBER(10)'),
-    ('ORDERS', 'ORDER_DATE', 'TIMESTAMP'),
-    ('ORDERS', 'TOTAL_AMOUNT', 'NUMBER(15,2)'),
-    ('ORDERS', 'STATUS', 'VARCHAR2(20)'),
-    ('ORDERS', 'SHIPPING_INFO', 'CLOB'),
-    ('ORDER_ITEMS', 'ITEM_ID', 'NUMBER(10)'),
-    ('ORDER_ITEMS', 'ORDER_ID', 'NUMBER(10)'),
-    ('ORDER_ITEMS', 'PRODUCT_ID', 'NUMBER(10)'),
-    ('ORDER_ITEMS', 'QUANTITY', 'NUMBER(5)'),
-    ('ORDER_ITEMS', 'UNIT_PRICE', 'NUMBER(10,2)'),
-    ('CUSTOMERS', 'CUSTOMER_ID', 'NUMBER(10)'),
-    ('CUSTOMERS', 'NAME', 'VARCHAR2(100)'),
-    ('CUSTOMERS', 'EMAIL', 'VARCHAR2(100)'),
-    ('CUSTOMERS', 'TIER', 'VARCHAR2(20)'),
-    ('CUSTOMERS', 'REGION', 'VARCHAR2(50)'),
-    ('PRODUCTS', 'PRODUCT_ID', 'NUMBER(10)'),
-    ('PRODUCTS', 'NAME', 'VARCHAR2(200)'),
-    ('PRODUCTS', 'CATEGORY', 'VARCHAR2(50)'),
-    ('PRODUCTS', 'PRICE', 'NUMBER(10,2)'),
-    ('PRODUCTS', 'STOCK_QTY', 'NUMBER(10)')
+-- Seed schema registry with known columns (is_active = true = already promoted)
+INSERT INTO cdc_schema_registry (table_name, column_name, column_type, pg_table_name, pg_column_name, is_active, promoted_at) VALUES
+    -- ORDERS
+    ('ORDERS', 'ORDER_ID',      'NUMBER(10)',   'cdc_orders', 'order_id',      true, NOW()),
+    ('ORDERS', 'CUSTOMER_ID',   'NUMBER(10)',   'cdc_orders', 'customer_id',   true, NOW()),
+    ('ORDERS', 'ORDER_DATE',    'TIMESTAMP',    'cdc_orders', 'order_date',    true, NOW()),
+    ('ORDERS', 'TOTAL_AMOUNT',  'NUMBER(15,2)', 'cdc_orders', 'total_amount',  true, NOW()),
+    ('ORDERS', 'STATUS',        'VARCHAR2(20)', 'cdc_orders', 'status',        true, NOW()),
+    ('ORDERS', 'SHIPPING_INFO', 'CLOB',         'cdc_orders', 'shipping_info', true, NOW()),
+    -- ORDER_ITEMS
+    ('ORDER_ITEMS', 'ITEM_ID',     'NUMBER(10)',   'cdc_order_items', 'item_id',    true, NOW()),
+    ('ORDER_ITEMS', 'ORDER_ID',    'NUMBER(10)',   'cdc_order_items', 'order_id',   true, NOW()),
+    ('ORDER_ITEMS', 'PRODUCT_ID',  'NUMBER(10)',   'cdc_order_items', 'product_id', true, NOW()),
+    ('ORDER_ITEMS', 'QUANTITY',    'NUMBER(5)',    'cdc_order_items', 'quantity',   true, NOW()),
+    ('ORDER_ITEMS', 'UNIT_PRICE',  'NUMBER(10,2)', 'cdc_order_items', 'unit_price', true, NOW()),
+    ('ORDER_ITEMS', 'SUBTOTAL',    'NUMBER(15,2)', 'cdc_order_items', 'subtotal',   true, NOW()),
+    -- CUSTOMERS
+    ('CUSTOMERS', 'CUSTOMER_ID', 'NUMBER(10)',   'cdc_customers', 'customer_id', true, NOW()),
+    ('CUSTOMERS', 'FIRST_NAME',  'VARCHAR2(100)', 'cdc_customers', 'name',       true, NOW()),
+    ('CUSTOMERS', 'LAST_NAME',   'VARCHAR2(100)', 'cdc_customers', '_last_name', true, NOW()),
+    ('CUSTOMERS', 'EMAIL',       'VARCHAR2(100)', 'cdc_customers', 'email',      true, NOW()),
+    ('CUSTOMERS', 'TIER',        'VARCHAR2(20)',  'cdc_customers', 'tier',       true, NOW()),
+    ('CUSTOMERS', 'CITY',        'VARCHAR2(50)',  'cdc_customers', 'region',     true, NOW()),
+    -- PRODUCTS
+    ('PRODUCTS', 'PRODUCT_ID',     'NUMBER(10)',   'cdc_products', 'product_id', true, NOW()),
+    ('PRODUCTS', 'NAME',           'VARCHAR2(200)', 'cdc_products', 'name',      true, NOW()),
+    ('PRODUCTS', 'CATEGORY',       'VARCHAR2(50)',  'cdc_products', 'category',  true, NOW()),
+    ('PRODUCTS', 'PRICE',          'NUMBER(10,2)',  'cdc_products', 'price',     true, NOW()),
+    ('PRODUCTS', 'STOCK_QUANTITY', 'NUMBER(10)',    'cdc_products', 'stock_qty', true, NOW()),
+    ('PRODUCTS', 'STATUS',         'VARCHAR2(20)',  'cdc_products', 'is_active', true, NOW()),
+    -- AUDIT_LOG
+    ('AUDIT_LOG', 'LOG_ID',      'NUMBER(10)',   'cdc_audit_log', 'log_id',      true, NOW()),
+    ('AUDIT_LOG', 'ACTION',      'VARCHAR2(50)', 'cdc_audit_log', 'event_type',  true, NOW()),
+    ('AUDIT_LOG', 'ENTITY_TYPE', 'VARCHAR2(100)', 'cdc_audit_log', 'table_name', true, NOW()),
+    ('AUDIT_LOG', 'ENTITY_ID',   'NUMBER(10)',   'cdc_audit_log', 'record_id',   true, NOW()),
+    ('AUDIT_LOG', 'USER_ID',     'NUMBER(10)',   'cdc_audit_log', 'changed_by',  true, NOW()),
+    ('AUDIT_LOG', 'CREATED_AT',  'TIMESTAMP',    'cdc_audit_log', 'changed_at',  true, NOW())
 ON CONFLICT (table_name, column_name) DO NOTHING;
 
 -- =============================================================================
