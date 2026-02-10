@@ -12,6 +12,7 @@ from src.spark_consumer.writers.postgres_writer import (
     PostgresWriter,
     TABLE_COLUMNS,
     CDC_TO_PG_COLUMN_MAP,
+    UPSERT_TABLES,
 )
 
 
@@ -134,6 +135,73 @@ class TestPostgresWriterBatch:
         from circuitbreaker import CircuitBreakerError
         with pytest.raises(CircuitBreakerError):
             writer.write_batch("cdc_orders", [{"order_id": 1}])
+
+
+class TestPostgresWriterUpsert:
+
+    def test_upsert_tables_defined(self):
+        assert "cdc_customers" in UPSERT_TABLES
+        assert "cdc_products" in UPSERT_TABLES
+        assert "cdc_orders_enriched" in UPSERT_TABLES
+
+    def test_upsert_tables_not_transactional(self):
+        assert "cdc_orders" not in UPSERT_TABLES
+        assert "cdc_order_items" not in UPSERT_TABLES
+        assert "cdc_audit_log" not in UPSERT_TABLES
+
+    def test_upsert_conflict_keys(self):
+        assert UPSERT_TABLES["cdc_customers"] == ("customer_id",)
+        assert UPSERT_TABLES["cdc_products"] == ("product_id",)
+        assert UPSERT_TABLES["cdc_orders_enriched"] == ("order_id",)
+
+    @patch.object(PostgresWriter, '_ensure_connection', return_value=True)
+    @patch.object(PostgresWriter, '_execute_batch_upsert', return_value=3)
+    def test_write_batch_routes_to_upsert_for_customers(self, mock_upsert, mock_conn, writer):
+        records = [{"customer_id": i, "name": f"Cust {i}"} for i in range(3)]
+        result = writer.write_batch("cdc_customers", records)
+        assert result == 3
+        mock_upsert.assert_called_once()
+
+    @patch.object(PostgresWriter, '_ensure_connection', return_value=True)
+    @patch.object(PostgresWriter, '_execute_batch_upsert', return_value=2)
+    def test_write_batch_routes_to_upsert_for_products(self, mock_upsert, mock_conn, writer):
+        records = [{"product_id": i, "name": f"Prod {i}"} for i in range(2)]
+        result = writer.write_batch("cdc_products", records)
+        assert result == 2
+        mock_upsert.assert_called_once()
+
+    @patch.object(PostgresWriter, '_ensure_connection', return_value=True)
+    @patch.object(PostgresWriter, '_execute_batch_insert', return_value=5)
+    def test_write_batch_routes_to_insert_for_orders(self, mock_insert, mock_conn, writer):
+        records = [{"order_id": i} for i in range(5)]
+        result = writer.write_batch("cdc_orders", records)
+        assert result == 5
+        mock_insert.assert_called_once()
+
+    def test_upsert_sql_generation(self, writer):
+        """Verify the upsert SQL has ON CONFLICT DO UPDATE"""
+        import psycopg2.extras
+
+        mock_cursor = MagicMock()
+        mock_context = MagicMock()
+        mock_context.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_context.__exit__ = MagicMock(return_value=False)
+
+        writer._conn = MagicMock()
+        writer._conn.closed = False
+        writer._conn.cursor.return_value = mock_context
+
+        records = [{"customer_id": 1, "name": "John", "email": "j@x.com",
+                     "tier": "GOLD", "region": "Jakarta", "created_at": None,
+                     "source_ts": None, "operation": "u"}]
+
+        with patch.object(psycopg2.extras, 'execute_batch') as mock_exec:
+            writer._execute_batch_upsert("cdc_customers", TABLE_COLUMNS["cdc_customers"], records)
+            sql = mock_exec.call_args[0][1]
+            assert "ON CONFLICT (customer_id)" in sql
+            assert "DO UPDATE SET" in sql
+            assert "name = EXCLUDED.name" in sql
+            assert "customer_id = EXCLUDED.customer_id" not in sql  # conflict key excluded from SET
 
 
 class TestPostgresWriterDLQ:

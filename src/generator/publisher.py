@@ -132,7 +132,8 @@ class SolacePublisher:
         self,
         event: DebeziumEvent,
         table: str,
-        operation: str
+        operation: str,
+        schema: str = "SALES"
     ) -> bool:
         """Publish CDC event to Solace topic"""
         if not self._connected:
@@ -142,7 +143,7 @@ class SolacePublisher:
         try:
             # Build topic name: cdc/oracle/SALES/ORDERS/insert
             topic_name = self.config.get_topic(
-                self.config.vpn,  # Use schema from config
+                schema,
                 table,
                 operation
             )

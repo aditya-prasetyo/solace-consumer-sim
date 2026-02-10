@@ -323,7 +323,7 @@ class SparkCDCConsumer:
         extracted_items = []
 
         for record in records:
-            xml_data = record.pop("shipping_info", None)
+            xml_data = record.get("shipping_info")
             if xml_data:
                 try:
                     from .transformations.xml_extractor import parse_shipping_xml

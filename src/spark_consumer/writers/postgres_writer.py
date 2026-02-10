@@ -115,6 +115,14 @@ CDC_TO_PG_COLUMN_MAP = {
 }
 
 
+# Tables that use upsert (dimension/derived tables) with their conflict keys
+UPSERT_TABLES = {
+    "cdc_customers": ("customer_id",),
+    "cdc_products": ("product_id",),
+    "cdc_orders_enriched": ("order_id",),
+}
+
+
 class PostgresWriter:
     """Write CDC data to PostgreSQL ODS"""
 
@@ -223,6 +231,8 @@ class PostgresWriter:
             return 0
 
         try:
+            if table in UPSERT_TABLES:
+                return self._execute_batch_upsert(table, columns, records)
             return self._execute_batch_insert(table, columns, records)
         except psycopg2.errors.UniqueViolation:
             # Duplicate - not a system failure
@@ -258,6 +268,38 @@ class PostgresWriter:
         self._conn.commit()
         self._record_success()
         logger.debug(f"Inserted {len(rows)} records into {table}")
+        return len(rows)
+
+    def _execute_batch_upsert(
+        self, table: str, columns: List[str], records: List[Dict[str, Any]]
+    ) -> int:
+        """Execute batch upsert (INSERT ... ON CONFLICT DO UPDATE) for dimension tables"""
+        conflict_keys = UPSERT_TABLES[table]
+        update_cols = [c for c in columns if c not in conflict_keys]
+
+        col_str = ", ".join(columns)
+        placeholders = ", ".join(["%s"] * len(columns))
+        conflict_str = ", ".join(conflict_keys)
+        update_str = ", ".join(
+            f"{col} = EXCLUDED.{col}" for col in update_cols
+        )
+
+        sql = (
+            f"INSERT INTO {table} ({col_str}) VALUES ({placeholders}) "
+            f"ON CONFLICT ({conflict_str}) DO UPDATE SET {update_str}"
+        )
+
+        rows = []
+        for record in records:
+            row = tuple(record.get(col) for col in columns)
+            rows.append(row)
+
+        with self._conn.cursor() as cur:
+            psycopg2.extras.execute_batch(cur, sql, rows, page_size=self.config.batch_size)
+
+        self._conn.commit()
+        self._record_success()
+        logger.debug(f"Upserted {len(rows)} records into {table}")
         return len(rows)
 
     def _execute_single_inserts(

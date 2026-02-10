@@ -63,10 +63,10 @@ CREATE TABLE IF NOT EXISTS cdc_order_items_extracted (
 
 CREATE INDEX idx_cdc_order_items_ext_order_id ON cdc_order_items_extracted(order_id);
 
--- Customers (from CDC CUSTOMERS table)
+-- Customers (from CDC CUSTOMERS table) - Upsert by customer_id
 CREATE TABLE IF NOT EXISTS cdc_customers (
     id SERIAL PRIMARY KEY,
-    customer_id INT NOT NULL,
+    customer_id INT NOT NULL UNIQUE,
     name VARCHAR(100),
     email VARCHAR(100),
     tier VARCHAR(20),                      -- GOLD, SILVER, BRONZE
@@ -74,17 +74,16 @@ CREATE TABLE IF NOT EXISTS cdc_customers (
     created_at TIMESTAMP,
     source_ts TIMESTAMP,
     operation VARCHAR(10),
-    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT uq_customers_customer_id UNIQUE (customer_id, processed_at)
+    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_cdc_customers_customer_id ON cdc_customers(customer_id);
 CREATE INDEX idx_cdc_customers_tier ON cdc_customers(tier);
 
--- Products (from CDC PRODUCTS table)
+-- Products (from CDC PRODUCTS table) - Upsert by product_id
 CREATE TABLE IF NOT EXISTS cdc_products (
     id SERIAL PRIMARY KEY,
-    product_id INT NOT NULL,
+    product_id INT NOT NULL UNIQUE,
     name VARCHAR(200),
     category VARCHAR(50),
     price DECIMAL(10,2),
@@ -92,8 +91,7 @@ CREATE TABLE IF NOT EXISTS cdc_products (
     is_active BOOLEAN DEFAULT true,
     source_ts TIMESTAMP,
     operation VARCHAR(10),
-    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT uq_products_product_id UNIQUE (product_id, processed_at)
+    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_cdc_products_product_id ON cdc_products(product_id);
@@ -103,10 +101,10 @@ CREATE INDEX idx_cdc_products_category ON cdc_products(category);
 -- ENRICHED/AGGREGATED TABLES (Output from transformations)
 -- =============================================================================
 
--- Enriched Orders (hasil 3-way join: orders + customers + products)
+-- Enriched Orders (hasil 3-way join: orders + customers + products) - Upsert by order_id
 CREATE TABLE IF NOT EXISTS cdc_orders_enriched (
     id SERIAL PRIMARY KEY,
-    order_id INT,
+    order_id INT UNIQUE,
     customer_id INT,
     customer_name VARCHAR(100),
     customer_tier VARCHAR(20),

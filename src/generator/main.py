@@ -157,7 +157,7 @@ class CDCGenerator:
                 # Generate and publish event
                 event, _ = self._generate_event(table, operation)
                 if event:
-                    self.publisher.publish(event, table, operation)
+                    self.publisher.publish(event, table, operation, schema=self.config.generator.debezium_schema)
 
                 # Print periodic stats
                 if time.time() - last_stats_time >= stats_interval:

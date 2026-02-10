@@ -22,3 +22,4 @@ circuitbreaker>=2.0.0
 
 # Retry logic
 tenacity>=8.2.3
+requests
